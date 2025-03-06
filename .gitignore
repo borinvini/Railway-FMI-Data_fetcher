@@ -1,0 +1,45 @@
+# Ignore Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore Virtual Environments
+venv/
+.env/
+.venv/
+env/
+env.bak/
+
+# Ignore IDE and Editor Files
+.vscode/
+.idea/
+*.sublime-workspace
+
+# Ignore OS-generated files
+.DS_Store
+Thumbs.db
+
+# Ignore Logs and Debugging Files
+logs/
+*.log
+
+# Ignore Data Files (Optional: Only ignore CSVs if they are generated)
+data/*.csv
+output_data/*.csv
+*.json
+
+# Ignore Jupyter Notebook checkpoints (if using notebooks)
+.ipynb_checkpoints/
+
+# Ignore environment files (secrets, API keys, credentials)
+.env
+config.ini
+secrets.json
+
+# Ignore Conda Environment Files (except `environment.yml`)
+*.conda
+*.yml.lock
+
+# Ignore Git-specific files
+.git/
