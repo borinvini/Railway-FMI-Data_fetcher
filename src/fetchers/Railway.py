@@ -9,8 +9,8 @@ from config.const import FIN_RAILWAY_ALL_TRAINS, FIN_RAILWAY_BASE_URL, FIN_RAILW
 class RailwayDataFetcher:
     """Class to fetch and process railway data from Digitraffic API."""
 
-    def __init__(self, base_url=FIN_RAILWAY_BASE_URL):
-        self.base_url = base_url
+    def __init__(self):
+        self.base_url = FIN_RAILWAY_BASE_URL
         self.output_folder = FOLDER_NAME
 
         # Ensure the output folder exists
@@ -72,6 +72,7 @@ class RailwayDataFetcher:
             return pd.DataFrame()
 
         print("Station metadata successfully loaded.")
+        self.preview_dataframe(df, "📍 Station Metadata Preview")
         return df
     
     def fetch_trains_by_interval(self, start_date, end_date, stations_metadata):
@@ -136,6 +137,8 @@ class RailwayDataFetcher:
             print("Data processing is complete.")
             # Combine enriched data
             trains_data = pd.concat(enriched_data, ignore_index=True)
+
+            self.preview_dataframe(trains_data, "🚆 Train Data Preview", num_rows=1)
         else:
             print("No 'timeTableRows' column found in the trains_data DataFrame.")
 
@@ -170,3 +173,15 @@ class RailwayDataFetcher:
             print(f"Error processing timeTableRows: {e}")
             return row  # Return the original row in case of an error
 
+
+    def preview_dataframe(self, df, title, num_rows=10):
+        """
+        Prints a preview of the DataFrame including the header and first few rows.
+
+        Parameters:
+        df (pd.DataFrame): The DataFrame to preview.
+        title (str): Title to display before the preview.
+        num_rows (int): Number of rows to display (default is 5).
+        """
+        print(f"\n{title}:\n")
+        print(df.head(num_rows).to_string(index=False))
