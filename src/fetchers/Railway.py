@@ -31,6 +31,26 @@ class RailwayDataFetcher:
         else:
             print("No data to save.")
 
+
+    def save_monthly_data_to_csv(self, df, month_str):
+        """
+        Save the train data for a specific month to a CSV file.
+
+        Args:
+            df (pd.DataFrame): DataFrame containing train data for the month.
+            month_str (str): The month in 'YYYY-MM' format.
+        """
+        # Convert the string 'YYYY-MM' into a Period object
+        month_period = pd.Period(month_str, freq='M')
+
+        filename = f"train_data_{month_period.year}_{month_period.month:02d}.csv"
+        filepath = os.path.join(self.output_folder, filename)
+
+        df.to_csv(filepath, index=False)
+        print(f"✅ Data for {month_str} saved to {filepath}")
+
+
+
     def get_data(self, endpoint, params=None):
         """
         Fetch data from the API endpoint with optional parameters.
@@ -77,25 +97,23 @@ class RailwayDataFetcher:
     
     def fetch_trains_by_interval(self, start_date, end_date, stations_metadata):
         """
-        Fetch train data for a given date range and return it as a DataFrame with enriched timetable data.
+        Fetch train data for a given date range and save it month by month while fetching.
 
         Args:
             start_date (str): Start date in 'YYYY-MM-DD' format.
             end_date (str): End date in 'YYYY-MM-DD' format.
             stations_metadata (pd.DataFrame): DataFrame containing station metadata.
-
-        Returns:
-            pd.DataFrame: DataFrame containing all trains for the given interval.
         """
         try:
             start_date = datetime.strptime(start_date, "%Y-%m-%d")
             end_date = datetime.strptime(end_date, "%Y-%m-%d")
         except ValueError:
             print("Invalid date format. Use 'YYYY-MM-DD'.")
-            return pd.DataFrame()
+            return
 
         current_date = start_date
-        all_train_data = []
+        current_month = start_date.strftime("%Y-%m")  # Track the current processing month
+        monthly_data = []
 
         while current_date <= end_date:
             date_str = current_date.strftime("%Y-%m-%d")
@@ -104,45 +122,39 @@ class RailwayDataFetcher:
             daily_data = self.get_data(endpoint)
 
             if daily_data:
-                all_train_data.extend(daily_data)
+                monthly_data.extend(daily_data)
 
-            current_date += timedelta(days=1)
+            next_date = current_date + timedelta(days=1)
 
-        if not all_train_data:
-            print(f"No train data found for {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
-            return pd.DataFrame()
+            # If the next date belongs to a new month, process and save the current month's data
+            if next_date.strftime("%Y-%m") != current_month or next_date > end_date:
+                if monthly_data:
+                    print(f"Processing and saving data for {current_month}. Please wait...")
+                    
+                    # Convert to DataFrame
+                    month_df = pd.DataFrame(monthly_data)
 
-        # Combine all daily data into a single DataFrame
-        trains_data = pd.DataFrame(all_train_data)
-        print(f"Fetched a total of {len(trains_data)} trains from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}.")
+                    # Enrich timetable rows with station names
+                    if "timeTableRows" in month_df.columns:
+                        month_df["timeTableRows"] = month_df["timeTableRows"].apply(
+                            lambda row: self._enrich_timetable_row(row, stations_metadata)
+                        )
 
-        # Enrich `timeTableRows` with station names, processing month by month
-        if "timeTableRows" in trains_data.columns:
-            trains_data["departureMonth"] = pd.to_datetime(trains_data["departureDate"]).dt.to_period("M")
-            months = trains_data["departureMonth"].unique()
+                    # Save month-wise data
+                    self.save_monthly_data_to_csv(month_df, current_month)
 
-            enriched_data = []
+                    # Clear memory
+                    del month_df
+                    monthly_data = []
 
-            for month in months:
-                print(f"Processing data for: {month}. Please wait...")
-                month_data = trains_data[trains_data["departureMonth"] == month].copy()
+                # Update current processing month
+                current_month = next_date.strftime("%Y-%m")
 
-                # Apply enrichment using the separate method
-                month_data["timeTableRows"] = month_data["timeTableRows"].apply(
-                    lambda row: self._enrich_timetable_row(row, stations_metadata)
-                )
+            # Move to the next day
+            current_date = next_date
 
-                enriched_data.append(month_data)
+        print("Data processing and saving is complete.")
 
-            print("Data processing is complete.")
-            # Combine enriched data
-            trains_data = pd.concat(enriched_data, ignore_index=True)
-
-            self.preview_dataframe(trains_data, "🚆 Train Data Preview", num_rows=1)
-        else:
-            print("No 'timeTableRows' column found in the trains_data DataFrame.")
-
-        return trains_data
 
     def _enrich_timetable_row(self, row, stations_metadata):
         """
