@@ -1,10 +1,11 @@
+from src.processors.DataLoader import DataLoader
 from src.fetchers.Railway import RailwayDataFetcher
 from src.fetchers.FMI import FMIDataFetcher
 
 from config.const import CSV_ALL_TRAINS, CSV_FMI, CSV_FMI_EMS, CSV_TRAIN_STATIONS, END_DATE, FMI_BBOX, START_DATE
 
 # Flag to control data collection
-DATA_FETCH = True
+DATA_FETCH = False
 
 if DATA_FETCH:
     railway_fetcher = RailwayDataFetcher()
@@ -30,4 +31,4 @@ if DATA_FETCH:
     fmi_fetcher.save_to_csv(ems_data, CSV_FMI_EMS)
 else:
     # Implement alternative logic here
-    print("Data collection is disabled. Implement alternative logic here.")
+    data_loader = DataLoader()
