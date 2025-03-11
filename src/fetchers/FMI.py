@@ -30,7 +30,7 @@ class FMIDataFetcher:
         else:
             print("No data to save.")
 
-    def save_monthly_to_csv(self, df, base_filename, year, month):
+    def save_monthly_data_to_csv(self, df, base_filename, year, month):
         """
         Saves the DataFrame in a monthly format: `filename_YYYY_MM.csv`.
 
@@ -41,8 +41,13 @@ class FMIDataFetcher:
             month (int): Month of the data.
         """
         if df is not None and not df.empty:
+            # Remove existing ".csv" extension if present in the base filename
+            if base_filename.endswith('.csv'):
+                base_filename = base_filename[:-4]  # Remove last 4 characters (".csv")
+
             filename = f"{base_filename}_{year}_{str(month).zfill(2)}.csv"
             self.save_to_csv(df, filename)
+
 
     def fetch_fmi_data(self, location, start_time, end_time, chunk_hours=1, max_retries=3):
         """
@@ -166,7 +171,7 @@ class FMIDataFetcher:
                 and (current_date.month != (current_date + timedelta(days=1)).month or current_date == end_date)
             ):
                 fmi_data_combined = pd.concat(all_fmi_data, ignore_index=True)
-                self.save_monthly_to_csv(fmi_data_combined, CSV_FMI, current_date.year, current_date.month)
+                self.save_monthly_data_to_csv(fmi_data_combined, CSV_FMI, current_date.year, current_date.month)
                 all_fmi_data = []  # Reset for the new month
 
             current_date += timedelta(days=1)

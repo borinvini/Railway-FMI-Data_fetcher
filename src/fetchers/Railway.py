@@ -4,7 +4,7 @@ import requests
 import pandas as pd
 import os
 
-from config.const import FIN_RAILWAY_ALL_TRAINS, FIN_RAILWAY_BASE_URL, FIN_RAILWAY_STATIONS, FOLDER_NAME
+from config.const import CSV_ALL_TRAINS, FIN_RAILWAY_ALL_TRAINS, FIN_RAILWAY_BASE_URL, FIN_RAILWAY_STATIONS, FOLDER_NAME
 
 class RailwayDataFetcher:
     """Class to fetch and process railway data from Digitraffic API."""
@@ -43,11 +43,17 @@ class RailwayDataFetcher:
         # Convert the string 'YYYY-MM' into a Period object
         month_period = pd.Period(month_str, freq='M')
 
-        filename = f"train_data_{month_period.year}_{month_period.month:02d}.csv"
+        # Get base filename from CSV_ALL_TRAINS and remove extension if it exists
+        base_filename = CSV_ALL_TRAINS.replace('.csv', '')
+
+        # Create filename using base name and month
+        filename = f"{base_filename}_{month_period.year}_{month_period.month:02d}.csv"
         filepath = os.path.join(self.output_folder, filename)
 
+        # Save to CSV
         df.to_csv(filepath, index=False)
         print(f"✅ Data for {month_str} saved to {filepath}")
+
 
 
 
