@@ -30,5 +30,15 @@ if DATA_FETCH:
     # fmi_fetcher.save_to_csv(fmi_data, CSV_FMI)
     fmi_fetcher.save_to_csv(ems_data, CSV_FMI_EMS)
 else:
-    # Implement alternative logic here
-    data_loader = DataLoader()
+    try:
+        data_loader = DataLoader()
+        print("\n✅ DataLoader initialized successfully.")
+
+        # Call the match method only if the class creation is successful
+        merged_data = data_loader.match_train_with_ems()
+        print(merged_data.head())
+
+        data_loader.load_csv_files_by_month()
+
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
