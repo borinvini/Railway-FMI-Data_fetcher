@@ -162,7 +162,7 @@ class DataLoader:
 
         # Drop unnecessary columns from train stations
         self.merged_metadata = self.merged_metadata.drop(
-            columns=["type", "stationUICCode", "countryCode", "passengerTraffic"],
+            columns=["type", "stationUICCode", "countryCode"],
             errors="ignore"
         )
 
