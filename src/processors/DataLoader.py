@@ -7,6 +7,7 @@ import pandas as pd
 from glob import glob
 from haversine import haversine, Unit
 from config.const import CSV_ALL_TRAINS, CSV_CLOSEST_EMS_TRAIN, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_TRAIN_STATIONS, FOLDER_NAME
+from config.const import send_email
 
 class DataLoader:
     def __init__(self):
@@ -222,6 +223,10 @@ class DataLoader:
             # Call the merge function
             self.merge_train_weather_data(train_data, weather_data, month)
 
+            # Send email with the specific month in the subject and body
+            subject = f"Code Execution Complete for {month}"
+            body = f"The code has finished running successfully for {month}."
+            send_email(subject, body)
 
     def merge_train_weather_data(self, train_data, weather_data, month_str):
         """
@@ -305,6 +310,7 @@ class DataLoader:
         # Save the merged data for the specific month
         self.save_monthly_data_to_csv(train_data, month_str)
         print(f"\n✅ Merged data for {month_str} saved successfully!")
+
 
     def _find_closest_weather(self, ems_station, scheduled_time):
         """
