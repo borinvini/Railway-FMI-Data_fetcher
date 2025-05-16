@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 import requests
 import pandas as pd
 import os
+from deep_translator import GoogleTranslator
 
 from config.const import CSV_ALL_TRAINS, FIN_RAILWAY_ALL_TRAINS, FIN_RAILWAY_BASE_URL, FIN_RAILWAY_STATIONS, FIN_RAILWAY_TRAIN_CAT, FIN_RAILWAY_TRAIN_CAUSES, FIN_RAILWAY_TRAIN_CAUSES_DETAILED, FIN_RAILWAY_TRAIN_THIRD_CAUSES, FOLDER_NAME
 
@@ -128,9 +129,10 @@ class RailwayDataFetcher:
     def fetch_cause_category_codes_metadata(self):
         """
         Fetch and return cause category codes metadata as a DataFrame.
+        Adds English translations for the Finnish category names.
 
         Returns:
-            pd.DataFrame: DataFrame containing cause category codes metadata.
+            pd.DataFrame: DataFrame containing cause category codes metadata with translations.
         """
         print(f"Fetching cause category codes metadata from {self.base_url}{FIN_RAILWAY_TRAIN_CAUSES}...")
         data = self.get_data(FIN_RAILWAY_TRAIN_CAUSES)
@@ -144,6 +146,9 @@ class RailwayDataFetcher:
         if df.empty:
             print("Fetched cause category codes metadata is empty.")
             return pd.DataFrame()
+
+        # Translate the categoryName column
+        df = self.translate_finnish_to_english(df, "categoryName")
 
         print("Cause category codes metadata successfully loaded.")
         self.preview_dataframe(df, "🚨 Cause Category Codes Metadata Preview")
@@ -299,3 +304,70 @@ class RailwayDataFetcher:
         """
         print(f"\n{title}:\n")
         print(df.head(num_rows).to_string(index=False))
+
+    def translate_finnish_to_english(self, df, source_column, target_column=None):
+        """
+        Translates Finnish text in a DataFrame column to English.
+        
+        Args:
+            df (pd.DataFrame): DataFrame containing the column to translate
+            source_column (str): Name of the column containing Finnish text
+            target_column (str, optional): Name of the column to store translations.
+                                        If None, will use source_column + '_en'
+        
+        Returns:
+            pd.DataFrame: DataFrame with added translation column
+        """
+        if target_column is None:
+            target_column = f"{source_column}_en"
+        
+        # Check if DataFrame is empty
+        if df.empty:
+            return df
+            
+        try:
+            from deep_translator import GoogleTranslator
+            import time
+            
+            print(f"Translating '{source_column}' from Finnish to English...")
+            
+            # Define translation function with error handling and retry logic
+            def translate_text(text):
+                if pd.isna(text) or text == "":
+                    return ""
+                    
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        # Add a delay between requests to avoid rate limiting
+                        time.sleep(1.5)
+                        
+                        translation = GoogleTranslator(source='fi', target='en').translate(text)
+                        return translation
+                    except Exception as e:
+                        print(f"Translation attempt {attempt+1} failed for '{text}': {e}")
+                        # Wait longer between retries
+                        time.sleep(3.0)
+                
+                # If all retries fail, return a fallback
+                return f"{text} [untranslated]"
+            
+            # Apply translation to each item one at a time
+            translations = []
+            for idx, row in df.iterrows():
+                text = row[source_column]
+                print(f"Translating [{idx+1}/{len(df)}]: {text}")
+                translated = translate_text(text)
+                translations.append(translated)
+                
+            df[target_column] = translations
+            print("✅ Translation completed successfully.")
+            
+        except ImportError:
+            print("⚠️ deep_translator package not found. Install with: pip install deep-translator")
+            df[target_column] = df[source_column] + " [untranslated]"
+        except Exception as e:
+            print(f"⚠️ Translation error: {e}")
+            df[target_column] = df[source_column] + " [translation error]"
+            
+        return df
