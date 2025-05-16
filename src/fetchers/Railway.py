@@ -4,7 +4,7 @@ import requests
 import pandas as pd
 import os
 
-from config.const import CSV_ALL_TRAINS, FIN_RAILWAY_ALL_TRAINS, FIN_RAILWAY_BASE_URL, FIN_RAILWAY_STATIONS, FIN_RAILWAY_TRAIN_CAT, FIN_RAILWAY_TRAIN_CAUSES, FIN_RAILWAY_TRAIN_THIRD_CAUSES, FOLDER_NAME
+from config.const import CSV_ALL_TRAINS, FIN_RAILWAY_ALL_TRAINS, FIN_RAILWAY_BASE_URL, FIN_RAILWAY_STATIONS, FIN_RAILWAY_TRAIN_CAT, FIN_RAILWAY_TRAIN_CAUSES, FIN_RAILWAY_TRAIN_CAUSES_DETAILED, FIN_RAILWAY_TRAIN_THIRD_CAUSES, FOLDER_NAME
 
 class RailwayDataFetcher:
     """Class to fetch and process railway data from Digitraffic API."""
@@ -124,6 +124,30 @@ class RailwayDataFetcher:
         print("Train categories metadata successfully loaded.")
         self.preview_dataframe(df, "🚆 Train Categories Metadata Preview")
         return df
+    
+    def fetch_cause_category_codes_metadata(self):
+        """
+        Fetch and return cause category codes metadata as a DataFrame.
+
+        Returns:
+            pd.DataFrame: DataFrame containing cause category codes metadata.
+        """
+        print(f"Fetching cause category codes metadata from {self.base_url}{FIN_RAILWAY_TRAIN_CAUSES}...")
+        data = self.get_data(FIN_RAILWAY_TRAIN_CAUSES)
+
+        if not data:
+            print("No cause category codes metadata available. Please check the API or data source.")
+            return pd.DataFrame()
+
+        # Convert to DataFrame
+        df = pd.DataFrame(data)
+        if df.empty:
+            print("Fetched cause category codes metadata is empty.")
+            return pd.DataFrame()
+
+        print("Cause category codes metadata successfully loaded.")
+        self.preview_dataframe(df, "🚨 Cause Category Codes Metadata Preview")
+        return df
 
     def fetch_detailed_cause_category_codes_metadata(self):
         """
@@ -132,8 +156,8 @@ class RailwayDataFetcher:
         Returns:
             pd.DataFrame: DataFrame containing detailed cause category codes metadata.
         """
-        print(f"Fetching detailed cause category codes metadata from {self.base_url}{FIN_RAILWAY_TRAIN_CAUSES}...")
-        data = self.get_data(FIN_RAILWAY_TRAIN_CAUSES)
+        print(f"Fetching detailed cause category codes metadata from {self.base_url}{FIN_RAILWAY_TRAIN_CAUSES_DETAILED}...")
+        data = self.get_data(FIN_RAILWAY_TRAIN_CAUSES_DETAILED)
 
         if not data:
             print("No detailed cause category codes metadata available. Please check the API or data source.")
