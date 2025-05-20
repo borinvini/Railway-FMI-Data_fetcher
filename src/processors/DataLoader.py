@@ -282,10 +282,27 @@ class DataLoader:
                     print(f"🚨 Failed to decode timetable for train {train_number} on {departure_date}: {e}")
                     timetable = []  # Fallback to empty list
 
+            # Find the differenceInMinutes of the first station
+            first_station_delay = None
+            if timetable and isinstance(timetable, list) and len(timetable) > 0:
+                first_station = timetable[0]
+                if "differenceInMinutes" in first_station:
+                    first_station_delay = first_station.get("differenceInMinutes", 0)
+
             # Iterate over each station stop in the timetable
-            for train_track in timetable:
+            for i, train_track in enumerate(timetable):
                 station_short_code = train_track.get("stationShortCode")
                 scheduled_time = train_track.get("scheduledTime")
+
+                # Calculate differenceInMinutes_offset
+                if first_station_delay is not None and "differenceInMinutes" in train_track:
+                    if i == 0:  # This is the first station
+                        # For the first station, keep the original differenceInMinutes
+                        train_track["differenceInMinutes_offset"] = train_track.get("differenceInMinutes", 0)
+                    else:
+                        # For other stations, calculate the offset
+                        current_delay = train_track.get("differenceInMinutes", 0)
+                        train_track["differenceInMinutes_offset"] = current_delay - first_station_delay
 
                 if station_short_code and scheduled_time:
                     closest_ems_row = self.merged_metadata.loc[
