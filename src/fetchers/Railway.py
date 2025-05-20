@@ -157,9 +157,10 @@ class RailwayDataFetcher:
     def fetch_detailed_cause_category_codes_metadata(self):
         """
         Fetch and return detailed cause category codes metadata as a DataFrame.
+        Adds English translations for the Finnish detailed category names.
 
         Returns:
-            pd.DataFrame: DataFrame containing detailed cause category codes metadata.
+            pd.DataFrame: DataFrame containing detailed cause category codes metadata with translations.
         """
         print(f"Fetching detailed cause category codes metadata from {self.base_url}{FIN_RAILWAY_TRAIN_CAUSES_DETAILED}...")
         data = self.get_data(FIN_RAILWAY_TRAIN_CAUSES_DETAILED)
@@ -173,6 +174,9 @@ class RailwayDataFetcher:
         if df.empty:
             print("Fetched detailed cause category codes metadata is empty.")
             return pd.DataFrame()
+            
+        # Translate the detailedCategoryName column
+        df = self.translate_finnish_to_english(df, "detailedCategoryName")
 
         print("Detailed cause category codes metadata successfully loaded.")
         self.preview_dataframe(df, "🚨 Detailed Cause Category Codes Metadata Preview")
@@ -181,9 +185,10 @@ class RailwayDataFetcher:
     def fetch_third_cause_category_codes_metadata(self):
         """
         Fetch and return third cause category codes metadata as a DataFrame.
+        Adds English translations for the Finnish third category names.
 
         Returns:
-            pd.DataFrame: DataFrame containing third cause category codes metadata.
+            pd.DataFrame: DataFrame containing third cause category codes metadata with translations.
         """
         print(f"Fetching third cause category codes metadata from {self.base_url}{FIN_RAILWAY_TRAIN_THIRD_CAUSES}...")
         data = self.get_data(FIN_RAILWAY_TRAIN_THIRD_CAUSES)
@@ -197,6 +202,9 @@ class RailwayDataFetcher:
         if df.empty:
             print("Fetched third cause category codes metadata is empty.")
             return pd.DataFrame()
+
+        # Translate the thirdCategoryName column
+        df = self.translate_finnish_to_english(df, "thirdCategoryName")
 
         print("Third cause category codes metadata successfully loaded.")
         self.preview_dataframe(df, "🔍 Third Cause Category Codes Metadata Preview")
