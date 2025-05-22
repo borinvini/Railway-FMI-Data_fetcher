@@ -43,6 +43,16 @@ CSV_FMI_EMS = "metadata_fmi_ems_stations.csv"
 CSV_CLOSEST_EMS_TRAIN = "metadata_closest_ems_to_train_stations.csv"
 CSV_MATCHED_DATA = "matched_data.csv"
 
+# Day of week mapping
+DAY_OF_WEEK_MAPPING = {
+    1: "Monday",
+    2: "Tuesday", 
+    3: "Wednesday",
+    4: "Thursday",
+    5: "Friday",
+    6: "Saturday",
+    7: "Sunday"
+}
 
 # Email configuration
 SMTP_SERVER = 'smtp.gmail.com'
