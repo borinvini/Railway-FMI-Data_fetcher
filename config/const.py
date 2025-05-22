@@ -4,6 +4,12 @@ END_DATE = "2022-12-31" # YYYY-MM-DD
 CATEGORY = "All Categories" 
 OPERATOR = "All Operators"
 
+# Delay threshold (in minutes) for considering a stop as delayed
+DELAY_LONG_DISTANCE_TRAINS = 5
+
+# List of mandatory stations for long-distance train route analysis
+MANDATORY_STATIONS = ["HKI", "OL"]  # Helsinki and Oulu
+
 # 
 FMI_BBOX = "18,55,35,75" # Bounding box for Finland
 #FMI_BBOX = "20.8,59.4,27.2,67.6"

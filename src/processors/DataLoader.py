@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from glob import glob
 from haversine import haversine, Unit
-from config.const import CSV_ALL_TRAINS, CSV_CLOSEST_EMS_TRAIN, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_TRAIN_STATIONS, FOLDER_NAME
+from config.const import CSV_ALL_TRAINS, CSV_CLOSEST_EMS_TRAIN, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_TRAIN_STATIONS, DELAY_LONG_DISTANCE_TRAINS, FOLDER_NAME, MANDATORY_STATIONS
 from config.const import send_email
 
 class DataLoader:
@@ -231,6 +231,7 @@ class DataLoader:
     def merge_train_weather_data(self, train_data, weather_data, month_str):
         """
         Merges train timetable data with the closest EMS weather observations for one month.
+        Also tracks delays for trains passing through both HKI and OL stations.
 
         Parameters:
             train_data (pd.DataFrame): DataFrame containing train schedule data.
@@ -253,7 +254,25 @@ class DataLoader:
             for station, df in weather_data.groupby("station_name")
         }
 
+        # Initialize delay tracking
+        delay_file_path = os.path.join(self.output_folder, "delay_table.csv")
+        
+        # Initialize or load existing delay summary data
+        if os.path.exists(delay_file_path):
+            delay_summary_df = pd.read_csv(delay_file_path)
+            print(f"Loaded existing delay summary with {len(delay_summary_df)} records.")
+        else:
+            delay_summary_df = pd.DataFrame(columns=["year", "month", "delay_count", "total_month_schedules"])
+            print("Created new delay summary table.")
+        
+        # Extract year and month from month_str
+        year, month = month_str.split("-")
+        
+        # Initialize counters for current month
+        month_delay_count = 0
+        total_month_schedules = 0
         total_trains = len(train_data)
+        route_trains = 0
 
         # Iterate over train data using itertuples for better performance
         for idx, train_row in enumerate(train_data.itertuples(index=False), start=1):
@@ -289,6 +308,21 @@ class DataLoader:
                 if "differenceInMinutes" in first_station:
                     first_station_delay = first_station.get("differenceInMinutes", 0)
 
+            # Check if this train passes through both HKI and OL
+            station_codes = []
+            for stop in timetable:
+                if isinstance(stop, dict) and "stationShortCode" in stop:
+                    station_codes.append(stop.get("stationShortCode"))
+            
+            # Check if train passes through all mandatory stations
+            passes_through_mandatory_stations = all(station in station_codes for station in MANDATORY_STATIONS)
+            
+            if passes_through_mandatory_stations:
+                route_trains += 1
+                # Count all station stops for trains on this route
+                if isinstance(timetable, list):
+                    total_month_schedules += len(timetable)
+
             # Iterate over each station stop in the timetable
             for i, train_track in enumerate(timetable):
                 station_short_code = train_track.get("stationShortCode")
@@ -320,6 +354,13 @@ class DataLoader:
 
                         # Merge weather data into the stop dictionary
                         train_track["weather_observations"] = weather_data
+                        
+                        # Track delays for HKI-OL trains
+                        if passes_through_mandatory_stations:
+                            offset = train_track.get("differenceInMinutes_offset")
+                            if offset is not None and offset >= DELAY_LONG_DISTANCE_TRAINS:
+                                # Increment delay counter
+                                month_delay_count += 1
 
             # FIX: Reassign timetable back to the DataFrame row
             train_data.at[idx - 1, "timeTableRows"] = timetable
@@ -327,6 +368,36 @@ class DataLoader:
         # Save the merged data for the specific month
         self.save_monthly_data_to_csv(train_data, month_str)
         print(f"\n✅ Merged data for {month_str} saved successfully!")
+        
+        # Update and save delay summary table
+        # Check if month already exists in summary
+        month_exists = ((delay_summary_df['year'] == year) & 
+                        (delay_summary_df['month'] == month)).any()
+        
+        if month_exists:
+            # Update existing entry
+            mask = (delay_summary_df['year'] == year) & (delay_summary_df['month'] == month)
+            delay_summary_df.loc[mask, 'delay_count'] = month_delay_count
+            delay_summary_df.loc[mask, 'total_month_schedules'] = total_month_schedules
+        else:
+            # Add new entry
+            new_row = pd.DataFrame([{
+                'year': year, 
+                'month': month, 
+                'delay_count': month_delay_count,
+                'total_month_schedules': total_month_schedules
+            }])
+            delay_summary_df = pd.concat([delay_summary_df, new_row], ignore_index=True)
+        
+        # Sort by year and month
+        delay_summary_df = delay_summary_df.sort_values(by=['year', 'month']).reset_index(drop=True)
+        
+        # Save updated summary
+        delay_summary_df.to_csv(delay_file_path, index=False)
+        print(f"✅ Updated delay summary for {month_str}: {month_delay_count} delays out of {total_month_schedules} total schedules.")
+        
+        print(f"Summary for {month_str}: Analyzed {total_trains} trains, found {route_trains} on HKI-OL route with {month_delay_count} delays out of {total_month_schedules} schedules.")
+        return train_data
 
 
     def _find_closest_weather(self, ems_station, scheduled_time):
@@ -377,4 +448,6 @@ class DataLoader:
         weather_dict = {"closest_ems": closest_row["station_name"], **weather_dict}
 
         return weather_dict
+
+        
 
