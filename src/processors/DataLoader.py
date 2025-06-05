@@ -234,6 +234,7 @@ class DataLoader:
         """
         Merges train timetable data with the closest EMS weather observations for one month.
         Also tracks delays for trains passing through both HKI and OL stations by day.
+        ONLY processes and saves trains that pass through all MANDATORY_STATIONS.
 
         Parameters:
             train_data (pd.DataFrame): DataFrame containing train schedule data.
@@ -252,8 +253,54 @@ class DataLoader:
             print(f"⚠️ EMS metadata file not found. Snow depth alternative search will be disabled.")
             self.ems_metadata = pd.DataFrame()
 
-        # Extract unique departure dates
-        unique_dates = train_data["departureDate"].unique()
+        # STEP 1: Filter trains that pass through ALL mandatory stations
+        print(f"🔍 Filtering trains that pass through mandatory stations: {MANDATORY_STATIONS}")
+        filtered_train_indices = []
+        
+        for idx, train_row in train_data.iterrows():
+            train_number = train_row.trainNumber
+            timetable = train_row.timeTableRows
+
+            # Fix timetable format if it's a string
+            if isinstance(timetable, str):
+                try:
+                    timetable_fixed = timetable.replace("'", '"') \
+                                                .replace("True", "true") \
+                                                .replace("False", "false") \
+                                                .replace("None", "null")
+
+                    timetable = json.loads(timetable_fixed)
+                    if not isinstance(timetable, list):
+                        raise ValueError("Decoded timetable is not a list")
+
+                except json.JSONDecodeError as e:
+                    print(f"🚨 Failed to decode timetable for train {train_number}: {e}")
+                    continue  # Skip this train
+
+            # Extract station codes from timetable
+            station_codes = []
+            if timetable and isinstance(timetable, list):
+                for stop in timetable:
+                    if isinstance(stop, dict) and "stationShortCode" in stop:
+                        station_codes.append(stop.get("stationShortCode"))
+            
+            # Check if train passes through all mandatory stations
+            passes_through_mandatory_stations = all(station in station_codes for station in MANDATORY_STATIONS)
+            
+            if passes_through_mandatory_stations:
+                filtered_train_indices.append(idx)
+
+        # Filter the train_data to only include trains that pass through mandatory stations
+        filtered_train_data = train_data.loc[filtered_train_indices].copy()
+        print(f"✅ Filtered from {len(train_data)} to {len(filtered_train_data)} trains that pass through mandatory stations.")
+
+        # If no trains pass through mandatory stations, return empty DataFrame
+        if filtered_train_data.empty:
+            print(f"⚠️ No trains found that pass through all mandatory stations for {month_str}")
+            return filtered_train_data
+
+        # Extract unique departure dates from filtered data
+        unique_dates = filtered_train_data["departureDate"].unique()
         print(f"🔹 Starting to process train and weather data for {len(unique_dates)} departure dates.")
 
         # Ensure timestamp is in datetime format (convert inplace to avoid copies)
@@ -287,11 +334,10 @@ class DataLoader:
         # Initialize daily delay tracking dictionary
         daily_delays = {}  # key: date_str, value: {'delay_count': int, 'total_schedules': int, ...}
         
-        total_trains = len(train_data)
         route_trains = 0
 
-        # Group train data by departure date for daily processing
-        train_data_grouped = train_data.groupby('departureDate')
+        # Group filtered train data by departure date for daily processing
+        train_data_grouped = filtered_train_data.groupby('departureDate')
 
         for departure_date, day_trains in train_data_grouped:
             print(f"📅 Processing data for departure date: {departure_date}")
@@ -302,7 +348,7 @@ class DataLoader:
             day_total_delay_minutes = 0
             day_max_delay = 0
             day_route_trains = set()
-            day_all_delays = []  # NEW: List to store all delay values for the day
+            day_all_delays = []  # List to store all delay values for the day
             
             # Parse the departure date to get day of week
             try:
@@ -313,18 +359,18 @@ class DataLoader:
                 print(f"🚨 Invalid date format: {departure_date}")
                 continue
 
-            # Process trains for this specific date
+            # Process trains for this specific date (all are already filtered for mandatory stations)
             for idx, train_row in day_trains.iterrows():
                 train_number = train_row.trainNumber
                 timetable = train_row.timeTableRows
 
-                # ✅ Fix timetable format if it's a string
+                # Fix timetable format if it's a string
                 if isinstance(timetable, str):
                     try:
                         timetable_fixed = timetable.replace("'", '"') \
-                                                .replace("True", "true") \
-                                                .replace("False", "false") \
-                                                .replace("None", "null")
+                                                    .replace("True", "true") \
+                                                    .replace("False", "false") \
+                                                    .replace("None", "null")
 
                         timetable = json.loads(timetable_fixed)
                         if not isinstance(timetable, list):
@@ -334,28 +380,20 @@ class DataLoader:
                         print(f"🚨 Failed to decode timetable for train {train_number} on {departure_date}: {e}")
                         timetable = []  # Fallback to empty list
 
+                # Since all trains are already filtered, we know they pass through mandatory stations
+                route_trains += 1
+                day_route_trains.add(train_number)
+                
+                # Count all station stops for these trains
+                if isinstance(timetable, list):
+                    day_total_schedules += len(timetable)
+
                 # Find the differenceInMinutes of the first station
                 first_station_delay = None
                 if timetable and isinstance(timetable, list) and len(timetable) > 0:
                     first_station = timetable[0]
                     if "differenceInMinutes" in first_station:
                         first_station_delay = first_station.get("differenceInMinutes", 0)
-
-                # Check if this train passes through both HKI and OL
-                station_codes = []
-                for stop in timetable:
-                    if isinstance(stop, dict) and "stationShortCode" in stop:
-                        station_codes.append(stop.get("stationShortCode"))
-                
-                # Check if train passes through all mandatory stations
-                passes_through_mandatory_stations = all(station in station_codes for station in MANDATORY_STATIONS)
-                
-                if passes_through_mandatory_stations:
-                    route_trains += 1
-                    day_route_trains.add(train_number)
-                    # Count all station stops for trains on this route
-                    if isinstance(timetable, list):
-                        day_total_schedules += len(timetable)
 
                 # Iterate over each station stop in the timetable
                 for i, train_track in enumerate(timetable):
@@ -382,7 +420,7 @@ class DataLoader:
                             train_lat = closest_ems_row.iloc[0]["train_lat"]
                             train_long = closest_ems_row.iloc[0]["train_long"]
 
-                            # ✅ Call private method to find closest weather with snow depth alternative
+                            # Call private method to find closest weather with snow depth alternative
                             weather_data_point = self._find_closest_weather(
                                 closest_ems_station, 
                                 scheduled_time, 
@@ -396,23 +434,22 @@ class DataLoader:
                             # Merge weather data into the stop dictionary
                             train_track["weather_observations"] = weather_data_point
                             
-                            # Track delays for HKI-OL trains
-                            if passes_through_mandatory_stations:
-                                offset = train_track.get("differenceInMinutes_offset")
-                                if offset is not None and offset >= DELAY_LONG_DISTANCE_TRAINS:
-                                    # Increment delay counter for this day
-                                    day_delay_count += 1
-                                    day_total_delay_minutes += offset
-                                    day_max_delay = max(day_max_delay, offset)
-                                    day_all_delays.append(offset)  # NEW: Store the delay value
+                            # Track delays (all trains are now on the mandatory route)
+                            offset = train_track.get("differenceInMinutes_offset")
+                            if offset is not None and offset >= DELAY_LONG_DISTANCE_TRAINS:
+                                # Increment delay counter for this day
+                                day_delay_count += 1
+                                day_total_delay_minutes += offset
+                                day_max_delay = max(day_max_delay, offset)
+                                day_all_delays.append(offset)  # Store the delay value
 
-                # FIX: Reassign timetable back to the DataFrame row
-                train_data.at[idx, "timeTableRows"] = timetable
+                # Reassign timetable back to the DataFrame row
+                filtered_train_data.at[idx, "timeTableRows"] = timetable
 
             # Calculate average delay for the day
             day_avg_delay = day_total_delay_minutes / day_delay_count if day_delay_count > 0 else 0
 
-            # NEW: Find top 10 most common delays
+            # Find top 10 most common delays
             if day_all_delays:
                 delay_counter = Counter(day_all_delays)
                 # Get top 10 most common delays (returns list of tuples [(delay, count), ...])
@@ -434,12 +471,12 @@ class DataLoader:
                 'max_delay_minutes': day_max_delay,
                 'total_trains_on_route': len(day_route_trains),
                 'avg_delay_minutes': round(day_avg_delay, 2),
-                'top_10_common_delays': str(top_10_delay_values)  # NEW: Convert list to string for CSV storage
+                'top_10_common_delays': str(top_10_delay_values)
             }
 
-        # Save the merged data for the specific month
-        self.save_monthly_data_to_csv(train_data, month_str)
-        print(f"\n✅ Merged data for {month_str} saved successfully!")
+        # Save the merged data for the specific month (now only filtered trains)
+        self.save_monthly_data_to_csv(filtered_train_data, month_str)
+        print(f"\n✅ Merged data for {month_str} saved successfully! Only trains passing through {MANDATORY_STATIONS} included.")
         
         # Update and save delay summary table with daily data
         for date_str, daily_stats in daily_delays.items():
@@ -460,7 +497,7 @@ class DataLoader:
                 delay_summary_df.loc[mask, 'max_delay_minutes'] = daily_stats['max_delay_minutes']
                 delay_summary_df.loc[mask, 'total_trains_on_route'] = daily_stats['total_trains_on_route']
                 delay_summary_df.loc[mask, 'avg_delay_minutes'] = daily_stats['avg_delay_minutes']
-                delay_summary_df.loc[mask, 'top_10_common_delays'] = daily_stats['top_10_common_delays']  # NEW
+                delay_summary_df.loc[mask, 'top_10_common_delays'] = daily_stats['top_10_common_delays']
             else:
                 # Add new entry
                 new_row = pd.DataFrame([{
@@ -474,7 +511,7 @@ class DataLoader:
                     'max_delay_minutes': daily_stats['max_delay_minutes'],
                     'total_trains_on_route': daily_stats['total_trains_on_route'],
                     'avg_delay_minutes': daily_stats['avg_delay_minutes'],
-                    'top_10_common_delays': daily_stats['top_10_common_delays']  # NEW
+                    'top_10_common_delays': daily_stats['top_10_common_delays']
                 }])
                 delay_summary_df = pd.concat([delay_summary_df, new_row], ignore_index=True)
         
@@ -490,9 +527,9 @@ class DataLoader:
         total_month_trains = sum(stats['total_trains_on_route'] for stats in daily_delays.values())
         
         print(f"✅ Updated delay summary for {month_str}: {len(daily_delays)} days processed.")
-        print(f"Summary for {month_str}: Analyzed {total_trains} trains, found {route_trains} on HKI-OL route with {total_month_delays} delays out of {total_month_schedules} schedules from {total_month_trains} total route trains.")
+        print(f"Summary for {month_str}: Analyzed {len(filtered_train_data)} trains on HKI-OL route with {total_month_delays} delays out of {total_month_schedules} schedules from {total_month_trains} total route trains.")
         
-        return train_data
+        return filtered_train_data
 
     def _find_alternative_snow_depth(self, train_lat, train_long, scheduled_time, exclude_station=None, max_distance_km=50):
         """
