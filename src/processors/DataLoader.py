@@ -17,6 +17,7 @@ class DataLoader:
         self.train_files = None
         self.weather_files = None
         self.merged_metadata = None
+        self.ems_metadata = None  # Store EMS station metadata for snow depth search
 
         self._check_data_folder()
 
@@ -242,6 +243,15 @@ class DataLoader:
         Returns:
             pd.DataFrame: Updated train_data DataFrame with weather observations merged into timetable records.
         """
+        # Load EMS metadata for snow depth alternative search
+        ems_stations_path = os.path.join(self.data_folder, CSV_FMI_EMS)
+        if os.path.exists(ems_stations_path):
+            self.ems_metadata = pd.read_csv(ems_stations_path)
+            print(f"✅ Loaded EMS metadata with {len(self.ems_metadata)} stations for snow depth search.")
+        else:
+            print(f"⚠️ EMS metadata file not found. Snow depth alternative search will be disabled.")
+            self.ems_metadata = pd.DataFrame()
+
         # Extract unique departure dates
         unique_dates = train_data["departureDate"].unique()
         print(f"🔹 Starting to process train and weather data for {len(unique_dates)} departure dates.")
@@ -369,9 +379,16 @@ class DataLoader:
 
                         if not closest_ems_row.empty:
                             closest_ems_station = closest_ems_row.iloc[0]["closest_ems_station"]
+                            train_lat = closest_ems_row.iloc[0]["train_lat"]
+                            train_long = closest_ems_row.iloc[0]["train_long"]
 
-                            # ✅ Call private method to find closest weather
-                            weather_data_point = self._find_closest_weather(closest_ems_station, scheduled_time)
+                            # ✅ Call private method to find closest weather with snow depth alternative
+                            weather_data_point = self._find_closest_weather(
+                                closest_ems_station, 
+                                scheduled_time, 
+                                train_lat, 
+                                train_long
+                            )
 
                             if not weather_data_point:
                                 print(f"⚠️ No weather data available for {closest_ems_station} at {scheduled_time}")
@@ -477,17 +494,106 @@ class DataLoader:
         
         return train_data
 
-
-    def _find_closest_weather(self, ems_station, scheduled_time):
+    def _find_alternative_snow_depth(self, train_lat, train_long, scheduled_time, exclude_station=None, max_distance_km=50):
         """
-        Finds the closest weather observation.
+        Finds snow depth from an alternative EMS station within the specified distance range.
+
+        Parameters:
+            train_lat (float): Latitude of the train station.
+            train_long (float): Longitude of the train station.
+            scheduled_time (str): The scheduled time in ISO format.
+            exclude_station (str): Station to exclude from search (the primary station).
+            max_distance_km (float): Maximum distance in kilometers to search for alternative stations.
+
+        Returns:
+            dict: Dictionary containing alternative snow depth value and distance, or empty dict if none found.
+        """
+        if self.ems_metadata.empty:
+            return {}
+
+        try:
+            # Convert scheduled time to datetime
+            scheduled_time_dt = datetime.strptime(scheduled_time, "%Y-%m-%dT%H:%M:%S.%fZ")
+        except ValueError as e:
+            print(f"🚨 Invalid scheduled time format for alternative search: {e}")
+            return {}
+
+        train_coords = (train_lat, train_long)
+        alternative_stations = []
+
+        # Find all EMS stations within the distance range
+        for _, ems_station in self.ems_metadata.iterrows():
+            station_name = ems_station["station_name"]
+            
+            # Skip the excluded station (primary closest station)
+            if exclude_station and station_name == exclude_station:
+                continue
+
+            # Skip if station has no weather data
+            if station_name not in self.ems_weather_dict:
+                continue
+
+            ems_coords = (ems_station["latitude"], ems_station["longitude"])
+            distance = haversine(train_coords, ems_coords, unit=Unit.KILOMETERS)
+
+            if distance <= max_distance_km:
+                alternative_stations.append({
+                    'station_name': station_name,
+                    'latitude': ems_station["latitude"],
+                    'longitude': ems_station["longitude"],
+                    'distance': distance
+                })
+
+        # Sort by distance (closest first)
+        alternative_stations.sort(key=lambda x: x['distance'])
+
+        # Search for snow depth data in alternative stations
+        for station_info in alternative_stations:
+            station_name = station_info['station_name']
+            station_weather_df = self.ems_weather_dict[station_name]
+
+            # Convert timestamps to numpy array for fast lookup
+            timestamps = station_weather_df["timestamp"].to_numpy(dtype="datetime64[ns]")
+            scheduled_time_np = np.datetime64(scheduled_time_dt)
+
+            # Use np.searchsorted for fast timestamp lookup
+            idx = np.searchsorted(timestamps, scheduled_time_np)
+
+            # Handle edge cases for boundary timestamps
+            if idx == 0:
+                closest_idx = 0
+            elif idx >= len(timestamps):
+                closest_idx = len(timestamps) - 1
+            else:
+                before = abs(timestamps[idx - 1] - scheduled_time_np)
+                after = abs(timestamps[idx] - scheduled_time_np)
+                closest_idx = idx if after < before else idx - 1
+
+            closest_row = station_weather_df.iloc[closest_idx]
+            
+            # Check if this station has snow depth data
+            snow_depth = closest_row.get("Snow depth")
+            if pd.notna(snow_depth) and snow_depth is not None:
+                return {
+                    'Snow depth Other': float(snow_depth),
+                    'Snow depth Other Distance': round(station_info['distance'], 2)
+                }
+
+        # No alternative snow depth found
+        return {}
+
+    def _find_closest_weather(self, ems_station, scheduled_time, train_lat, train_long):
+        """
+        Finds the closest weather observation and alternative snow depth if needed.
 
         Parameters:
             ems_station (str): The closest EMS station name.
             scheduled_time (str): The scheduled time in ISO format.
+            train_lat (float): Latitude of the train station.
+            train_long (float): Longitude of the train station.
 
         Returns:
-            dict: A dictionary containing the matched weather observations.
+            dict: A dictionary containing the matched weather observations and alternative snow depth if applicable.
         """
         try:
             # Convert scheduled time to datetime
@@ -524,5 +630,27 @@ class DataLoader:
         closest_row = station_weather_df.iloc[closest_idx]
         weather_dict = closest_row.drop(["station_name", "timestamp"]).to_dict()
         weather_dict = {"closest_ems": closest_row["station_name"], **weather_dict}
+
+        # Check if Snow depth is null/missing and search for alternative
+        snow_depth = weather_dict.get("Snow depth")
+        if pd.isna(snow_depth) or snow_depth is None:
+            alternative_snow_data = self._find_alternative_snow_depth(
+                train_lat, 
+                train_long, 
+                scheduled_time, 
+                exclude_station=ems_station, 
+                max_distance_km=50
+            )
+            
+            if alternative_snow_data:
+                weather_dict.update(alternative_snow_data)
+            else:
+                # No alternative found, set to None
+                weather_dict['Snow depth Other'] = None
+                weather_dict['Snow depth Other Distance'] = None
+        else:
+            # Primary snow depth exists, set alternative columns to None
+            weather_dict['Snow depth Other'] = None
+            weather_dict['Snow depth Other Distance'] = None
 
         return weather_dict
