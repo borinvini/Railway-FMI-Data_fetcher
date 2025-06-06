@@ -8,7 +8,7 @@ OPERATOR = "All Operators"
 DELAY_LONG_DISTANCE_TRAINS = 5
 
 # List of mandatory stations for long-distance train route analysis
-MANDATORY_STATIONS = ["HKI", "OL"]  # Helsinki and Oulu
+MANDATORY_STATIONS = ["HKI", "OL", "ROI"]  # Helsinki and Oulu
 
 # 
 FMI_BBOX = "18,55,35,75" # Bounding box for Finland
