@@ -395,20 +395,56 @@ class DataLoader:
                     if "differenceInMinutes" in first_station:
                         first_station_delay = first_station.get("differenceInMinutes", 0)
 
+                # Variable to track the previous station's differenceInMinutes for eachStation_offset calculation
+                previous_station_delay = None
+
                 # Iterate over each station stop in the timetable
                 for i, train_track in enumerate(timetable):
                     station_short_code = train_track.get("stationShortCode")
                     scheduled_time = train_track.get("scheduledTime")
 
-                    # Calculate differenceInMinutes_offset
-                    if first_station_delay is not None and "differenceInMinutes" in train_track:
-                        if i == 0:  # This is the first station
-                            # For the first station, keep the original differenceInMinutes
-                            train_track["differenceInMinutes_offset"] = train_track.get("differenceInMinutes", 0)
+                    # Calculate both offset columns and reorder them
+                    if "differenceInMinutes" in train_track:
+                        current_delay = train_track.get("differenceInMinutes", 0)
+                        
+                        # Calculate differenceInMinutes_offset
+                        if first_station_delay is not None:
+                            if i == 0:  # This is the first station
+                                # For the first station, keep the original differenceInMinutes
+                                offset_value = current_delay
+                            else:
+                                # For other stations, calculate the offset
+                                offset_value = current_delay - first_station_delay
                         else:
-                            # For other stations, calculate the offset
-                            current_delay = train_track.get("differenceInMinutes", 0)
-                            train_track["differenceInMinutes_offset"] = current_delay - first_station_delay
+                            offset_value = current_delay
+                        
+                        # Calculate differenceInMinutes_eachStation_offset
+                        if i == 0:  # First station
+                            # For the first station, keep the original differenceInMinutes
+                            each_station_offset_value = current_delay
+                            previous_station_delay = current_delay
+                        else:
+                            # For other stations, calculate difference from previous station's delay
+                            if previous_station_delay is not None:
+                                each_station_offset_value = current_delay - previous_station_delay
+                                previous_station_delay = current_delay
+                            else:
+                                each_station_offset_value = current_delay
+                                previous_station_delay = current_delay
+                        
+                        # Store original train_track data
+                        original_data = dict(train_track)
+                        
+                        # Rebuild train_track with desired column order
+                        train_track.clear()
+                        
+                        # Add columns in desired order
+                        for key, value in original_data.items():
+                            train_track[key] = value
+                            # Insert offset columns right after differenceInMinutes
+                            if key == "differenceInMinutes":
+                                train_track["differenceInMinutes_offset"] = offset_value
+                                train_track["differenceInMinutes_eachStation_offset"] = each_station_offset_value
 
                     if station_short_code and scheduled_time:
                         closest_ems_row = self.merged_metadata.loc[
