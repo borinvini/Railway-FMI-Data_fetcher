@@ -659,7 +659,7 @@ class DataLoader:
 
     def _find_closest_weather(self, ems_station, scheduled_time, train_lat, train_long):
         """
-        Finds the closest weather observation and alternative snow depth if needed.
+        Finds the closest weather observation and alternative weather data for multiple features if needed.
 
         Parameters:
             ems_station (str): The closest EMS station name.
@@ -668,7 +668,7 @@ class DataLoader:
             train_long (float): Longitude of the train station.
 
         Returns:
-            dict: A dictionary containing the matched weather observations and alternative snow depth if applicable.
+            dict: A dictionary containing the matched weather observations and alternative weather data for each feature if applicable.
         """
         try:
             # Convert scheduled time to datetime
@@ -706,27 +706,33 @@ class DataLoader:
         weather_dict = closest_row.drop(["station_name", "timestamp"]).to_dict()
         weather_dict = {"closest_ems": closest_row["station_name"], **weather_dict}
 
-        # Check if Snow depth is null/missing and search for alternative
-        target_weather_value = weather_dict.get(ALTERNATIVE_WEATHER_COLUMN)
-        if pd.isna(target_weather_value) or target_weather_value is None:
-            alternative_weather_data = self._find_alternative_weather_data(
-                train_lat, 
-                train_long, 
-                scheduled_time, 
-                target_column=ALTERNATIVE_WEATHER_COLUMN, 
-                max_distance_km=ALTERNATIVE_WEATHER_RADIUS_KM, 
-                exclude_station=ems_station
-            )
+        # Ensure ALTERNATIVE_WEATHER_COLUMN is a list
+        weather_features = ALTERNATIVE_WEATHER_COLUMN if isinstance(ALTERNATIVE_WEATHER_COLUMN, list) else [ALTERNATIVE_WEATHER_COLUMN]
+
+        # Check each weather feature for missing data and search for alternatives
+        for feature_name in weather_features:
+            target_weather_value = weather_dict.get(feature_name)
             
-            if alternative_weather_data:
-                weather_dict.update(alternative_weather_data)
+            if pd.isna(target_weather_value) or target_weather_value is None:
+                # Search for alternative weather data for this specific feature
+                alternative_weather_data = self._find_alternative_weather_data(
+                    train_lat, 
+                    train_long, 
+                    scheduled_time, 
+                    target_column=feature_name, 
+                    max_distance_km=ALTERNATIVE_WEATHER_RADIUS_KM, 
+                    exclude_station=ems_station
+                )
+                
+                if alternative_weather_data:
+                    weather_dict.update(alternative_weather_data)
+                else:
+                    # No alternative found, set to None
+                    weather_dict[f'{feature_name} Other'] = None
+                    weather_dict[f'{feature_name} Other Distance'] = None
             else:
-                # No alternative found, set to None
-                weather_dict[f'{ALTERNATIVE_WEATHER_COLUMN} Other'] = None
-                weather_dict[f'{ALTERNATIVE_WEATHER_COLUMN} Other Distance'] = None
-        else:
-            # Primary snow depth exists, set alternative columns to None
-            weather_dict[f'{ALTERNATIVE_WEATHER_COLUMN} Other'] = None
-            weather_dict[f'{ALTERNATIVE_WEATHER_COLUMN} Other Distance'] = None
+                # Primary weather data exists for this feature, set alternative columns to None
+                weather_dict[f'{feature_name} Other'] = None
+                weather_dict[f'{feature_name} Other Distance'] = None
 
         return weather_dict

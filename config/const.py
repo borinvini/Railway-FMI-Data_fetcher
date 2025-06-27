@@ -15,7 +15,7 @@ FMI_BBOX = "18,55,35,75" # Bounding box for Finland
 #FMI_BBOX = "20.8,59.4,27.2,67.6"
 
 # Alternative weather data search parameters
-ALTERNATIVE_WEATHER_COLUMN = "Snow depth"  # Target column name for alternative search
+ALTERNATIVE_WEATHER_COLUMN = ["Snow depth", "Precipitation amount", "Precipitation intensity", "Horizontal visibility", "Wind speed", "Gust speed"] # Target column name for alternative search
 ALTERNATIVE_WEATHER_RADIUS_KM = 50  # Maximum radius in kilometers for alternative weather station search
 
 
