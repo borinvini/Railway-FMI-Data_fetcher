@@ -7,7 +7,7 @@ import pandas as pd
 from glob import glob
 from haversine import haversine, Unit
 from collections import Counter
-from config.const import CSV_ALL_TRAINS, CSV_CLOSEST_EMS_TRAIN, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_TRAIN_STATIONS, DELAY_LONG_DISTANCE_TRAINS, FOLDER_NAME, MANDATORY_STATIONS
+from config.const import ALTERNATIVE_WEATHER_COLUMN, ALTERNATIVE_WEATHER_RADIUS_KM, CSV_ALL_TRAINS, CSV_CLOSEST_EMS_TRAIN, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_TRAIN_STATIONS, DELAY_LONG_DISTANCE_TRAINS, FOLDER_NAME, MANDATORY_STATIONS
 from config.const import send_email
 
 class DataLoader:
@@ -567,19 +567,21 @@ class DataLoader:
         
         return filtered_train_data
 
-    def _find_alternative_snow_depth(self, train_lat, train_long, scheduled_time, exclude_station=None, max_distance_km=50):
+    def _find_alternative_weather_data(self, train_lat, train_long, scheduled_time, target_column, max_distance_km, exclude_station=None):
         """
-        Finds snow depth from an alternative EMS station within the specified distance range.
+        Finds weather data for a specific column from an alternative EMS station within the specified distance range.
 
         Parameters:
             train_lat (float): Latitude of the train station.
             train_long (float): Longitude of the train station.
             scheduled_time (str): The scheduled time in ISO format.
-            exclude_station (str): Station to exclude from search (the primary station).
+            target_column (str): The weather column name to search for (e.g., "Snow depth", "Air temperature").
             max_distance_km (float): Maximum distance in kilometers to search for alternative stations.
+            exclude_station (str): Station to exclude from search (the primary station).
 
         Returns:
-            dict: Dictionary containing alternative snow depth value and distance, or empty dict if none found.
+            dict: Dictionary containing alternative weather value and distance, or empty dict if none found.
+                  Format: {'{target_column} Other': value, '{target_column} Other Distance': distance}
         """
         if self.ems_metadata.empty:
             return {}
@@ -620,7 +622,7 @@ class DataLoader:
         # Sort by distance (closest first)
         alternative_stations.sort(key=lambda x: x['distance'])
 
-        # Search for snow depth data in alternative stations
+        # Search for weather data in alternative stations
         for station_info in alternative_stations:
             station_name = station_info['station_name']
             station_weather_df = self.ems_weather_dict[station_name]
@@ -644,15 +646,15 @@ class DataLoader:
 
             closest_row = station_weather_df.iloc[closest_idx]
             
-            # Check if this station has snow depth data
-            snow_depth = closest_row.get("Snow depth")
-            if pd.notna(snow_depth) and snow_depth is not None:
+            # Check if this station has the target weather data
+            weather_value = closest_row.get(target_column)
+            if pd.notna(weather_value) and weather_value is not None:
                 return {
-                    'Snow depth Other': float(snow_depth),
-                    'Snow depth Other Distance': round(station_info['distance'], 2)
+                    f'{target_column} Other': float(weather_value),
+                    f'{target_column} Other Distance': round(station_info['distance'], 2)
                 }
 
-        # No alternative snow depth found
+        # No alternative weather data found
         return {}
 
     def _find_closest_weather(self, ems_station, scheduled_time, train_lat, train_long):
@@ -705,25 +707,26 @@ class DataLoader:
         weather_dict = {"closest_ems": closest_row["station_name"], **weather_dict}
 
         # Check if Snow depth is null/missing and search for alternative
-        snow_depth = weather_dict.get("Snow depth")
-        if pd.isna(snow_depth) or snow_depth is None:
-            alternative_snow_data = self._find_alternative_snow_depth(
+        target_weather_value = weather_dict.get(ALTERNATIVE_WEATHER_COLUMN)
+        if pd.isna(target_weather_value) or target_weather_value is None:
+            alternative_weather_data = self._find_alternative_weather_data(
                 train_lat, 
                 train_long, 
                 scheduled_time, 
-                exclude_station=ems_station, 
-                max_distance_km=50
+                target_column=ALTERNATIVE_WEATHER_COLUMN, 
+                max_distance_km=ALTERNATIVE_WEATHER_RADIUS_KM, 
+                exclude_station=ems_station
             )
             
-            if alternative_snow_data:
-                weather_dict.update(alternative_snow_data)
+            if alternative_weather_data:
+                weather_dict.update(alternative_weather_data)
             else:
                 # No alternative found, set to None
-                weather_dict['Snow depth Other'] = None
-                weather_dict['Snow depth Other Distance'] = None
+                weather_dict[f'{ALTERNATIVE_WEATHER_COLUMN} Other'] = None
+                weather_dict[f'{ALTERNATIVE_WEATHER_COLUMN} Other Distance'] = None
         else:
             # Primary snow depth exists, set alternative columns to None
-            weather_dict['Snow depth Other'] = None
-            weather_dict['Snow depth Other Distance'] = None
+            weather_dict[f'{ALTERNATIVE_WEATHER_COLUMN} Other'] = None
+            weather_dict[f'{ALTERNATIVE_WEATHER_COLUMN} Other Distance'] = None
 
         return weather_dict
