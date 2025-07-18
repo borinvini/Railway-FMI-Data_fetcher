@@ -1,8 +1,13 @@
+import os
 from src.processors.DataLoader import DataLoader
 from src.fetchers.Railway import RailwayDataFetcher
 from src.fetchers.FMI import FMIDataFetcher
 
-from config.const import CSV_ALL_TRAINS, CSV_FMI, CSV_FMI_EMS, CSV_TRAIN_CATEGORIES, CSV_TRAIN_CAUSES, CSV_TRAIN_CAUSES_DETAILED, CSV_TRAIN_STATIONS, CSV_TRAIN_THIRD_CAUSES, END_DATE, FMI_BBOX, START_DATE
+from config.const import CSV_ALL_TRAINS, CSV_FMI, CSV_FMI_EMS, CSV_TRAIN_CATEGORIES, CSV_TRAIN_CAUSES, CSV_TRAIN_CAUSES_DETAILED, CSV_TRAIN_STATIONS, CSV_TRAIN_THIRD_CAUSES, END_DATE, FMI_BBOX, FOLDER_NAME, START_DATE
+
+# Create data folder if it doesn't exist
+os.makedirs(FOLDER_NAME, exist_ok=True)
+print(f"✅ Data folder '{FOLDER_NAME}' is ready.")
 
 # Flag to control data collection
 DATA_FETCH = False

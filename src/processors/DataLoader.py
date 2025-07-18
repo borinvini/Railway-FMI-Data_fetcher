@@ -22,17 +22,23 @@ class DataLoader:
         self._check_data_folder()
 
     def _check_data_folder(self):
+        # Create data folder if it doesn't exist
         if not os.path.exists(self.data_folder):
-            raise FileNotFoundError(f"Data folder '{self.data_folder}' does not exist.")
-
+            os.makedirs(self.data_folder, exist_ok=True)
+            print(f"✅ Created data folder: {self.data_folder}")
+        
         # Find files matching the patterns
         self.train_files = glob(os.path.join(self.data_folder, f"{CSV_ALL_TRAINS[:-4]}*.csv"))
         self.weather_files = glob(os.path.join(self.data_folder, f"{CSV_FMI[:-4]}*.csv"))
 
         if not self.train_files:
+            print(f"⚠️ No train data files matching '{CSV_ALL_TRAINS}' found in the data folder.")
+            print(f"   Make sure to run the script with DATA_FETCH=True first to download the data.")
             raise FileNotFoundError(f"No train data files matching '{CSV_ALL_TRAINS}' found in the data folder.")
 
         if not self.weather_files:
+            print(f"⚠️ No weather data files matching '{CSV_FMI}' found in the data folder.")
+            print(f"   Make sure to run the script with DATA_FETCH=True first to download the data.")
             raise FileNotFoundError(f"No weather data files matching '{CSV_FMI}' found in the data folder.")
 
         print(f"Found {len(self.train_files)} train data files.")
