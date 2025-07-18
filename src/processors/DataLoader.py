@@ -16,8 +16,9 @@ class DataLoader:
         self.output_folder = FOLDER_NAME
         self.train_files = None
         self.weather_files = None
-        self.merged_metadata = None
-        self.ems_metadata = None  # Store EMS station metadata for snow depth search
+        self.merged_metadata: pd.DataFrame = pd.DataFrame()  
+        self.ems_metadata: pd.DataFrame = pd.DataFrame()     
+        self.ems_weather_dict: dict = {}                     # Store EMS station metadata for snow depth search
 
         self._check_data_folder()
 
@@ -250,6 +251,11 @@ class DataLoader:
         Returns:
             pd.DataFrame: Updated train_data DataFrame with weather observations merged into timetable records.
         """
+
+        # Check if merged_metadata is populated
+        if self.merged_metadata.empty:
+            raise ValueError("merged_metadata is empty. Call match_train_with_ems() first.")
+        
         # Load EMS metadata for snow depth alternative search
         ems_stations_path = os.path.join(self.data_folder, CSV_FMI_EMS)
         if os.path.exists(ems_stations_path):
