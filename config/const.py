@@ -5,10 +5,12 @@ CATEGORY = "All Categories"
 OPERATOR = "All Operators"
 
 # Delay threshold (in minutes) for considering a stop as delayed
+FILTER_BY_ROUTE = []
 DELAY_LONG_DISTANCE_TRAINS = 5
 
 # List of mandatory stations for long-distance train route analysis
-MANDATORY_STATIONS = ["HKI", "OL", "ROI"]  # Helsinki and Oulu
+FILTER_BY_ROUTE = True  # Set to True to filter trains by mandatory stations, False to include all trains
+MANDATORY_STATIONS = ["HKI", "OL", "ROI"]  # Helsinki, Oulu, and Rovaniemi - trains must pass through ALL these stations
 
 # 
 FMI_BBOX = "18,55,35,75" # Bounding box for Finland
@@ -47,6 +49,10 @@ CSV_FMI = "fmi_weather_observations.csv"
 CSV_FMI_EMS = "metadata_fmi_ems_stations.csv"
 CSV_CLOSEST_EMS_TRAIN = "metadata_closest_ems_to_train_stations.csv"
 CSV_MATCHED_DATA = "matched_data.csv"
+
+CSV_DELAY_TABLE_ORIGINAL = "delay_table_differenceInMinutes.csv"
+CSV_DELAY_TABLE_OFFSET = "delay_table_differenceInMinutes_offset.csv" 
+CSV_DELAY_TABLE_EACH_STATION = "delay_table_differenceInMinutes_eachStation_offset.csv"
 
 # Day of week mapping
 DAY_OF_WEEK_MAPPING = {

@@ -7,7 +7,7 @@ import pandas as pd
 from glob import glob
 from haversine import haversine, Unit
 from collections import Counter
-from config.const import ALTERNATIVE_WEATHER_COLUMN, ALTERNATIVE_WEATHER_RADIUS_KM, CSV_ALL_TRAINS, CSV_CLOSEST_EMS_TRAIN, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_TRAIN_STATIONS, DELAY_LONG_DISTANCE_TRAINS, FILTER_BY_ROUTE, FOLDER_NAME, MANDATORY_STATIONS
+from config.const import ALTERNATIVE_WEATHER_COLUMN, ALTERNATIVE_WEATHER_RADIUS_KM, CSV_ALL_TRAINS, CSV_CLOSEST_EMS_TRAIN, CSV_DELAY_TABLE_EACH_STATION, CSV_DELAY_TABLE_OFFSET, CSV_DELAY_TABLE_ORIGINAL, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_TRAIN_STATIONS, DELAY_LONG_DISTANCE_TRAINS, FILTER_BY_ROUTE, FOLDER_NAME, MANDATORY_STATIONS
 from config.const import send_email
 
 class DataLoader:
@@ -237,10 +237,182 @@ class DataLoader:
             body = f"The code has finished running successfully for {month}."
             send_email(subject, body)
 
+    def _track_delays_for_column(self, filtered_train_data, delay_column, csv_filename, month_str):
+        """
+        Helper method to track delays for a specific delay column and save to CSV.
+        
+        Parameters:
+            filtered_train_data (pd.DataFrame): DataFrame containing filtered train data.
+            delay_column (str): Name of the delay column to track ('differenceInMinutes', 'differenceInMinutes_offset', etc.)
+            csv_filename (str): Name of the CSV file to save results to
+            month_str (str): The month in 'YYYY-MM' format.
+        """
+        
+        # Initialize delay tracking
+        delay_file_path = os.path.join(self.output_folder, csv_filename)
+        
+        # Initialize or load existing delay summary data
+        if os.path.exists(delay_file_path):
+            delay_summary_df = pd.read_csv(delay_file_path)
+            print(f"Loaded existing {delay_column} delay summary with {len(delay_summary_df)} records.")
+        else:
+            delay_summary_df = pd.DataFrame(columns=[
+                "year", "month", "day_of_month", "day_of_week", 
+                "delay_count_by_day", "total_schedules_by_day",
+                "total_delay_minutes", "max_delay_minutes", "total_trains_on_route", 
+                "avg_delay_minutes", "top_10_common_delays"
+            ])
+            print(f"Created new {delay_column} delay summary table.")
+        
+        # Extract year and month from month_str
+        year, month = month_str.split("-")
+        
+        # Initialize daily delay tracking dictionary
+        daily_delays = {}  # key: date_str, value: {'delay_count': int, 'total_schedules': int, ...}
+        
+        # Group filtered train data by departure date for daily processing
+        train_data_grouped = filtered_train_data.groupby('departureDate')
+
+        for departure_date, day_trains in train_data_grouped:        
+            # Initialize daily counters
+            day_delay_count = 0
+            day_total_schedules = 0
+            day_total_delay_minutes = 0
+            day_max_delay = 0
+            day_route_trains = set()
+            day_all_delays = []  # List to store all delay values for the day
+            
+            # Parse the departure date to get day of week
+            try:
+                date_obj = datetime.strptime(departure_date, "%Y-%m-%d")
+                day_of_month = date_obj.day
+                day_of_week = date_obj.weekday() + 1  # Convert 0-6 to 1-7
+            except ValueError:
+                print(f"🚨 Invalid date format: {departure_date}")
+                continue
+
+            # Process trains for this specific date
+            for idx, train_row in day_trains.iterrows():
+                train_number = train_row.trainNumber
+                timetable = train_row.timeTableRows
+
+                # Fix timetable format if it's a string
+                if isinstance(timetable, str):
+                    try:
+                        timetable_fixed = timetable.replace("'", '"') \
+                                                    .replace("True", "true") \
+                                                    .replace("False", "false") \
+                                                    .replace("None", "null")
+
+                        timetable = json.loads(timetable_fixed)
+                        if not isinstance(timetable, list):
+                            raise ValueError("Decoded timetable is not a list")
+
+                    except json.JSONDecodeError as e:
+                        print(f"🚨 Failed to decode timetable for train {train_number} on {departure_date}: {e}")
+                        timetable = []  # Fallback to empty list
+
+                # Count this train
+                day_route_trains.add(train_number)
+                
+                # Count all station stops for these trains
+                if isinstance(timetable, list):
+                    day_total_schedules += len(timetable)
+
+                # Iterate over each station stop in the timetable
+                for train_track in timetable:
+                    # Track delays for the specific column
+                    delay_value = train_track.get(delay_column)
+                    if delay_value is not None and delay_value >= DELAY_LONG_DISTANCE_TRAINS:
+                        # Increment delay counter for this day
+                        day_delay_count += 1
+                        day_total_delay_minutes += delay_value
+                        day_max_delay = max(day_max_delay, delay_value)
+                        day_all_delays.append(delay_value)  # Store the delay value
+
+            # Calculate average delay for the day
+            day_avg_delay = day_total_delay_minutes / day_delay_count if day_delay_count > 0 else 0
+
+            # Find top 10 most common delays
+            if day_all_delays:
+                delay_counter = Counter(day_all_delays)
+                # Get top 10 most common delays (returns list of tuples [(delay, count), ...])
+                top_10_delays = delay_counter.most_common(10)
+                # Extract just the delay values
+                top_10_delay_values = [delay for delay, count in top_10_delays]
+            else:
+                top_10_delay_values = []
+
+            # Store daily statistics
+            daily_delays[departure_date] = {
+                'year': year,
+                'month': month,
+                'day_of_month': day_of_month,
+                'day_of_week': day_of_week,
+                'delay_count': day_delay_count,
+                'total_schedules': day_total_schedules,
+                'total_delay_minutes': day_total_delay_minutes,
+                'max_delay_minutes': day_max_delay,
+                'total_trains_on_route': len(day_route_trains),
+                'avg_delay_minutes': round(day_avg_delay, 2),
+                'top_10_common_delays': str(top_10_delay_values)
+            }
+
+        # Update and save delay summary table with daily data
+        for date_str, daily_stats in daily_delays.items():
+            # Check if this date already exists in summary
+            date_exists = ((delay_summary_df['year'] == daily_stats['year']) & 
+                        (delay_summary_df['month'] == daily_stats['month']) &
+                        (delay_summary_df['day_of_month'] == daily_stats['day_of_month'])).any()
+            
+            if date_exists:
+                # Update existing entry
+                mask = ((delay_summary_df['year'] == daily_stats['year']) & 
+                    (delay_summary_df['month'] == daily_stats['month']) &
+                    (delay_summary_df['day_of_month'] == daily_stats['day_of_month']))
+                delay_summary_df.loc[mask, 'day_of_week'] = daily_stats['day_of_week']
+                delay_summary_df.loc[mask, 'delay_count_by_day'] = daily_stats['delay_count']
+                delay_summary_df.loc[mask, 'total_schedules_by_day'] = daily_stats['total_schedules']
+                delay_summary_df.loc[mask, 'total_delay_minutes'] = daily_stats['total_delay_minutes']
+                delay_summary_df.loc[mask, 'max_delay_minutes'] = daily_stats['max_delay_minutes']
+                delay_summary_df.loc[mask, 'total_trains_on_route'] = daily_stats['total_trains_on_route']
+                delay_summary_df.loc[mask, 'avg_delay_minutes'] = daily_stats['avg_delay_minutes']
+                delay_summary_df.loc[mask, 'top_10_common_delays'] = daily_stats['top_10_common_delays']
+            else:
+                # Add new entry
+                new_row = pd.DataFrame([{
+                    'year': daily_stats['year'], 
+                    'month': daily_stats['month'],
+                    'day_of_month': daily_stats['day_of_month'],
+                    'day_of_week': daily_stats['day_of_week'],
+                    'delay_count_by_day': daily_stats['delay_count'],
+                    'total_schedules_by_day': daily_stats['total_schedules'],
+                    'total_delay_minutes': daily_stats['total_delay_minutes'],
+                    'max_delay_minutes': daily_stats['max_delay_minutes'],
+                    'total_trains_on_route': daily_stats['total_trains_on_route'],
+                    'avg_delay_minutes': daily_stats['avg_delay_minutes'],
+                    'top_10_common_delays': daily_stats['top_10_common_delays']
+                }])
+                delay_summary_df = pd.concat([delay_summary_df, new_row], ignore_index=True)
+        
+        # Sort by year, month, and day
+        delay_summary_df = delay_summary_df.sort_values(by=['year', 'month', 'day_of_month']).reset_index(drop=True)
+        
+        # Save updated summary
+        delay_summary_df.to_csv(delay_file_path, index=False)
+        
+        # Calculate totals for the month
+        total_month_delays = sum(stats['delay_count'] for stats in daily_delays.values())
+        total_month_schedules = sum(stats['total_schedules'] for stats in daily_delays.values())
+        total_month_trains = sum(stats['total_trains_on_route'] for stats in daily_delays.values())
+        
+        print(f"✅ Updated {delay_column} delay summary for {month_str}: {len(daily_delays)} days processed.")
+        print(f"   {delay_column} Summary: {total_month_delays} delays out of {total_month_schedules} schedules from {total_month_trains} total trains.")
+
     def merge_train_weather_data(self, train_data, weather_data, month_str):
         """
         Merges train timetable data with the closest EMS weather observations for one month.
-        Also tracks delays for trains based on route filtering settings.
+        Also tracks delays for trains based on route filtering settings using all 3 delay columns.
         
         Parameters:
             train_data (pd.DataFrame): DataFrame containing train schedule data.
@@ -331,52 +503,11 @@ class DataLoader:
             for station, df in weather_data.groupby("station_name")
         }
 
-        # Initialize delay tracking
-        delay_file_path = os.path.join(self.output_folder, "delay_table.csv")
-        
-        # Initialize or load existing delay summary data
-        if os.path.exists(delay_file_path):
-            delay_summary_df = pd.read_csv(delay_file_path)
-            print(f"Loaded existing delay summary with {len(delay_summary_df)} records.")
-        else:
-            delay_summary_df = pd.DataFrame(columns=[
-                "year", "month", "day_of_month", "day_of_week", 
-                "delay_count_by_day", "total_schedules_by_day",
-                "total_delay_minutes", "max_delay_minutes", "total_trains_on_route", 
-                "avg_delay_minutes", "top_10_common_delays"
-            ])
-            print("Created new delay summary table.")
-        
-        # Extract year and month from month_str
-        year, month = month_str.split("-")
-        
-        # Initialize daily delay tracking dictionary
-        daily_delays = {}  # key: date_str, value: {'delay_count': int, 'total_schedules': int, ...}
-        
-        route_trains = 0
-
         # Group filtered train data by departure date for daily processing
         train_data_grouped = filtered_train_data.groupby('departureDate')
 
         for departure_date, day_trains in train_data_grouped:
             print(f"📅 Processing data for departure date: {departure_date}")
-            
-            # Initialize daily counters
-            day_delay_count = 0
-            day_total_schedules = 0
-            day_total_delay_minutes = 0
-            day_max_delay = 0
-            day_route_trains = set()
-            day_all_delays = []  # List to store all delay values for the day
-            
-            # Parse the departure date to get day of week
-            try:
-                date_obj = datetime.strptime(departure_date, "%Y-%m-%d")
-                day_of_month = date_obj.day
-                day_of_week = date_obj.weekday() + 1  # Convert 0-6 to 1-7
-            except ValueError:
-                print(f"🚨 Invalid date format: {departure_date}")
-                continue
 
             # Process trains for this specific date
             for idx, train_row in day_trains.iterrows():
@@ -398,14 +529,6 @@ class DataLoader:
                     except json.JSONDecodeError as e:
                         print(f"🚨 Failed to decode timetable for train {train_number} on {departure_date}: {e}")
                         timetable = []  # Fallback to empty list
-
-                # Count this train (whether filtered or not)
-                route_trains += 1
-                day_route_trains.add(train_number)
-                
-                # Count all station stops for these trains
-                if isinstance(timetable, list):
-                    day_total_schedules += len(timetable)
 
                 # Find the differenceInMinutes of the first station
                 first_station_delay = None
@@ -488,46 +611,9 @@ class DataLoader:
 
                             # Merge weather data into the stop dictionary
                             train_track["weather_observations"] = weather_data_point
-                            
-                            # Track delays
-                            offset = train_track.get("differenceInMinutes_offset")
-                            if offset is not None and offset >= DELAY_LONG_DISTANCE_TRAINS:
-                                # Increment delay counter for this day
-                                day_delay_count += 1
-                                day_total_delay_minutes += offset
-                                day_max_delay = max(day_max_delay, offset)
-                                day_all_delays.append(offset)  # Store the delay value
 
                 # Reassign timetable back to the DataFrame row
                 filtered_train_data.at[idx, "timeTableRows"] = timetable
-
-            # Calculate average delay for the day
-            day_avg_delay = day_total_delay_minutes / day_delay_count if day_delay_count > 0 else 0
-
-            # Find top 10 most common delays
-            if day_all_delays:
-                delay_counter = Counter(day_all_delays)
-                # Get top 10 most common delays (returns list of tuples [(delay, count), ...])
-                top_10_delays = delay_counter.most_common(10)
-                # Extract just the delay values
-                top_10_delay_values = [delay for delay, count in top_10_delays]
-            else:
-                top_10_delay_values = []
-
-            # Store daily statistics
-            daily_delays[departure_date] = {
-                'year': year,
-                'month': month,
-                'day_of_month': day_of_month,
-                'day_of_week': day_of_week,
-                'delay_count': day_delay_count,
-                'total_schedules': day_total_schedules,
-                'total_delay_minutes': day_total_delay_minutes,
-                'max_delay_minutes': day_max_delay,
-                'total_trains_on_route': len(day_route_trains),
-                'avg_delay_minutes': round(day_avg_delay, 2),
-                'top_10_common_delays': str(top_10_delay_values)
-            }
 
         # Save the merged data for the specific month
         self.save_monthly_data_to_csv(filtered_train_data, month_str)
@@ -538,63 +624,34 @@ class DataLoader:
         else:
             print(f"\n✅ Merged data for {month_str} saved successfully! All trains included.")
         
-        # Update and save delay summary table with daily data
-        for date_str, daily_stats in daily_delays.items():
-            # Check if this date already exists in summary
-            date_exists = ((delay_summary_df['year'] == daily_stats['year']) & 
-                        (delay_summary_df['month'] == daily_stats['month']) &
-                        (delay_summary_df['day_of_month'] == daily_stats['day_of_month'])).any()
-            
-            if date_exists:
-                # Update existing entry
-                mask = ((delay_summary_df['year'] == daily_stats['year']) & 
-                    (delay_summary_df['month'] == daily_stats['month']) &
-                    (delay_summary_df['day_of_month'] == daily_stats['day_of_month']))
-                delay_summary_df.loc[mask, 'day_of_week'] = daily_stats['day_of_week']
-                delay_summary_df.loc[mask, 'delay_count_by_day'] = daily_stats['delay_count']
-                delay_summary_df.loc[mask, 'total_schedules_by_day'] = daily_stats['total_schedules']
-                delay_summary_df.loc[mask, 'total_delay_minutes'] = daily_stats['total_delay_minutes']
-                delay_summary_df.loc[mask, 'max_delay_minutes'] = daily_stats['max_delay_minutes']
-                delay_summary_df.loc[mask, 'total_trains_on_route'] = daily_stats['total_trains_on_route']
-                delay_summary_df.loc[mask, 'avg_delay_minutes'] = daily_stats['avg_delay_minutes']
-                delay_summary_df.loc[mask, 'top_10_common_delays'] = daily_stats['top_10_common_delays']
-            else:
-                # Add new entry
-                new_row = pd.DataFrame([{
-                    'year': daily_stats['year'], 
-                    'month': daily_stats['month'],
-                    'day_of_month': daily_stats['day_of_month'],
-                    'day_of_week': daily_stats['day_of_week'],
-                    'delay_count_by_day': daily_stats['delay_count'],
-                    'total_schedules_by_day': daily_stats['total_schedules'],
-                    'total_delay_minutes': daily_stats['total_delay_minutes'],
-                    'max_delay_minutes': daily_stats['max_delay_minutes'],
-                    'total_trains_on_route': daily_stats['total_trains_on_route'],
-                    'avg_delay_minutes': daily_stats['avg_delay_minutes'],
-                    'top_10_common_delays': daily_stats['top_10_common_delays']
-                }])
-                delay_summary_df = pd.concat([delay_summary_df, new_row], ignore_index=True)
+        # Track delays for all 3 delay columns using the helper method
+        print(f"\n📊 Tracking delays for all 3 delay columns for {month_str}...")
         
-        # Sort by year, month, and day
-        delay_summary_df = delay_summary_df.sort_values(by=['year', 'month', 'day_of_month']).reset_index(drop=True)
+        # Track delays for differenceInMinutes
+        self._track_delays_for_column(
+            filtered_train_data, 
+            "differenceInMinutes", 
+            CSV_DELAY_TABLE_ORIGINAL, 
+            month_str
+        )
         
-        # Save updated summary
-        delay_summary_df.to_csv(delay_file_path, index=False)
+        # Track delays for differenceInMinutes_offset
+        self._track_delays_for_column(
+            filtered_train_data, 
+            "differenceInMinutes_offset", 
+            CSV_DELAY_TABLE_OFFSET, 
+            month_str
+        )
         
-        # Calculate totals for the month
-        total_month_delays = sum(stats['delay_count'] for stats in daily_delays.values())
-        total_month_schedules = sum(stats['total_schedules'] for stats in daily_delays.values())
-        total_month_trains = sum(stats['total_trains_on_route'] for stats in daily_delays.values())
+        # Track delays for differenceInMinutes_eachStation_offset
+        self._track_delays_for_column(
+            filtered_train_data, 
+            "differenceInMinutes_eachStation_offset", 
+            CSV_DELAY_TABLE_EACH_STATION, 
+            month_str
+        )
         
-        print(f"✅ Updated delay summary for {month_str}: {len(daily_delays)} days processed.")
-        
-        # Update summary message based on filtering
-        if FILTER_BY_ROUTE and MANDATORY_STATIONS:
-            route_description = f"route passing through {'-'.join(MANDATORY_STATIONS)}"
-        else:
-            route_description = "all routes"
-        
-        print(f"Summary for {month_str}: Analyzed {len(filtered_train_data)} trains on {route_description} with {total_month_delays} delays out of {total_month_schedules} schedules from {total_month_trains} total trains.")
+        print(f"\n✅ All delay tracking completed for {month_str}!")
         
         return filtered_train_data
 
