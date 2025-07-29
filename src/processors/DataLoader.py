@@ -7,7 +7,7 @@ import pandas as pd
 from glob import glob
 from haversine import haversine, Unit
 from collections import Counter
-from config.const import ALTERNATIVE_WEATHER_COLUMN, ALTERNATIVE_WEATHER_RADIUS_KM, CSV_ALL_TRAINS, CSV_CLOSEST_EMS_TRAIN, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_TRAIN_STATIONS, DELAY_LONG_DISTANCE_TRAINS, FOLDER_NAME, MANDATORY_STATIONS
+from config.const import ALTERNATIVE_WEATHER_COLUMN, ALTERNATIVE_WEATHER_RADIUS_KM, CSV_ALL_TRAINS, CSV_CLOSEST_EMS_TRAIN, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_TRAIN_STATIONS, DELAY_LONG_DISTANCE_TRAINS, FILTER_BY_ROUTE, FOLDER_NAME, MANDATORY_STATIONS
 from config.const import send_email
 
 class DataLoader:
@@ -233,9 +233,8 @@ class DataLoader:
     def merge_train_weather_data(self, train_data, weather_data, month_str):
         """
         Merges train timetable data with the closest EMS weather observations for one month.
-        Also tracks delays for trains passing through both HKI and OL stations by day.
-        ONLY processes and saves trains that pass through all MANDATORY_STATIONS.
-
+        Also tracks delays for trains based on route filtering settings.
+        
         Parameters:
             train_data (pd.DataFrame): DataFrame containing train schedule data.
             weather_data (pd.DataFrame): DataFrame containing EMS weather observations.
@@ -244,6 +243,11 @@ class DataLoader:
         Returns:
             pd.DataFrame: Updated train_data DataFrame with weather observations merged into timetable records.
         """
+
+        # Check if merged_metadata is populated
+        if self.merged_metadata.empty:
+            raise ValueError("merged_metadata is empty. Call match_train_with_ems() first.")
+        
         # Load EMS metadata for snow depth alternative search
         ems_stations_path = os.path.join(self.data_folder, CSV_FMI_EMS)
         if os.path.exists(ems_stations_path):
@@ -253,51 +257,59 @@ class DataLoader:
             print(f"⚠️ EMS metadata file not found. Snow depth alternative search will be disabled.")
             self.ems_metadata = pd.DataFrame()
 
-        # STEP 1: Filter trains that pass through ALL mandatory stations
-        print(f"🔍 Filtering trains that pass through mandatory stations: {MANDATORY_STATIONS}")
-        filtered_train_indices = []
-        
-        for idx, train_row in train_data.iterrows():
-            train_number = train_row.trainNumber
-            timetable = train_row.timeTableRows
-
-            # Fix timetable format if it's a string
-            if isinstance(timetable, str):
-                try:
-                    timetable_fixed = timetable.replace("'", '"') \
-                                                .replace("True", "true") \
-                                                .replace("False", "false") \
-                                                .replace("None", "null")
-
-                    timetable = json.loads(timetable_fixed)
-                    if not isinstance(timetable, list):
-                        raise ValueError("Decoded timetable is not a list")
-
-                except json.JSONDecodeError as e:
-                    print(f"🚨 Failed to decode timetable for train {train_number}: {e}")
-                    continue  # Skip this train
-
-            # Extract station codes from timetable
-            station_codes = []
-            if timetable and isinstance(timetable, list):
-                for stop in timetable:
-                    if isinstance(stop, dict) and "stationShortCode" in stop:
-                        station_codes.append(stop.get("stationShortCode"))
+        # STEP 1: Filter trains based on route filtering setting
+        if FILTER_BY_ROUTE and MANDATORY_STATIONS:
+            print(f"🔍 Filtering trains that pass through mandatory stations: {MANDATORY_STATIONS}")
+            filtered_train_indices = []
             
-            # Check if train passes through all mandatory stations
-            passes_through_mandatory_stations = all(station in station_codes for station in MANDATORY_STATIONS)
+            for idx, train_row in train_data.iterrows():
+                train_number = train_row.trainNumber
+                timetable = train_row.timeTableRows
+
+                # Fix timetable format if it's a string
+                if isinstance(timetable, str):
+                    try:
+                        timetable_fixed = timetable.replace("'", '"') \
+                                                    .replace("True", "true") \
+                                                    .replace("False", "false") \
+                                                    .replace("None", "null")
+
+                        timetable = json.loads(timetable_fixed)
+                        if not isinstance(timetable, list):
+                            raise ValueError("Decoded timetable is not a list")
+
+                    except json.JSONDecodeError as e:
+                        print(f"🚨 Failed to decode timetable for train {train_number}: {e}")
+                        continue  # Skip this train
+
+                # Extract station codes from timetable
+                station_codes = []
+                if timetable and isinstance(timetable, list):
+                    for stop in timetable:
+                        if isinstance(stop, dict) and "stationShortCode" in stop:
+                            station_codes.append(stop.get("stationShortCode"))
+                
+                # Check if train passes through all mandatory stations
+                passes_through_mandatory_stations = all(station in station_codes for station in MANDATORY_STATIONS)
+                
+                if passes_through_mandatory_stations:
+                    filtered_train_indices.append(idx)
+
+            # Filter the train_data to only include trains that pass through mandatory stations
+            filtered_train_data = train_data.loc[filtered_train_indices].copy()
+            print(f"✅ Filtered from {len(train_data)} to {len(filtered_train_data)} trains that pass through mandatory stations.")
             
-            if passes_through_mandatory_stations:
-                filtered_train_indices.append(idx)
-
-        # Filter the train_data to only include trains that pass through mandatory stations
-        filtered_train_data = train_data.loc[filtered_train_indices].copy()
-        print(f"✅ Filtered from {len(train_data)} to {len(filtered_train_data)} trains that pass through mandatory stations.")
-
-        # If no trains pass through mandatory stations, return empty DataFrame
-        if filtered_train_data.empty:
-            print(f"⚠️ No trains found that pass through all mandatory stations for {month_str}")
-            return filtered_train_data
+            # If no trains pass through mandatory stations, return empty DataFrame
+            if filtered_train_data.empty:
+                print(f"⚠️ No trains found that pass through all mandatory stations for {month_str}")
+                return filtered_train_data
+        else:
+            # Include all trains (no filtering)
+            filtered_train_data = train_data.copy()
+            if FILTER_BY_ROUTE:
+                print(f"✅ Processing all {len(filtered_train_data)} trains (no mandatory stations specified).")
+            else:
+                print(f"✅ Processing all {len(filtered_train_data)} trains (route filtering disabled).")
 
         # Extract unique departure dates from filtered data
         unique_dates = filtered_train_data["departureDate"].unique()
@@ -359,7 +371,7 @@ class DataLoader:
                 print(f"🚨 Invalid date format: {departure_date}")
                 continue
 
-            # Process trains for this specific date (all are already filtered for mandatory stations)
+            # Process trains for this specific date
             for idx, train_row in day_trains.iterrows():
                 train_number = train_row.trainNumber
                 timetable = train_row.timeTableRows
@@ -380,7 +392,7 @@ class DataLoader:
                         print(f"🚨 Failed to decode timetable for train {train_number} on {departure_date}: {e}")
                         timetable = []  # Fallback to empty list
 
-                # Since all trains are already filtered, we know they pass through mandatory stations
+                # Count this train (whether filtered or not)
                 route_trains += 1
                 day_route_trains.add(train_number)
                 
@@ -470,7 +482,7 @@ class DataLoader:
                             # Merge weather data into the stop dictionary
                             train_track["weather_observations"] = weather_data_point
                             
-                            # Track delays (all trains are now on the mandatory route)
+                            # Track delays
                             offset = train_track.get("differenceInMinutes_offset")
                             if offset is not None and offset >= DELAY_LONG_DISTANCE_TRAINS:
                                 # Increment delay counter for this day
@@ -510,9 +522,14 @@ class DataLoader:
                 'top_10_common_delays': str(top_10_delay_values)
             }
 
-        # Save the merged data for the specific month (now only filtered trains)
+        # Save the merged data for the specific month
         self.save_monthly_data_to_csv(filtered_train_data, month_str)
-        print(f"\n✅ Merged data for {month_str} saved successfully! Only trains passing through {MANDATORY_STATIONS} included.")
+        
+        # Update print statement based on filtering
+        if FILTER_BY_ROUTE and MANDATORY_STATIONS:
+            print(f"\n✅ Merged data for {month_str} saved successfully! Only trains passing through {MANDATORY_STATIONS} included.")
+        else:
+            print(f"\n✅ Merged data for {month_str} saved successfully! All trains included.")
         
         # Update and save delay summary table with daily data
         for date_str, daily_stats in daily_delays.items():
@@ -563,7 +580,14 @@ class DataLoader:
         total_month_trains = sum(stats['total_trains_on_route'] for stats in daily_delays.values())
         
         print(f"✅ Updated delay summary for {month_str}: {len(daily_delays)} days processed.")
-        print(f"Summary for {month_str}: Analyzed {len(filtered_train_data)} trains on HKI-OL route with {total_month_delays} delays out of {total_month_schedules} schedules from {total_month_trains} total route trains.")
+        
+        # Update summary message based on filtering
+        if FILTER_BY_ROUTE and MANDATORY_STATIONS:
+            route_description = f"route passing through {'-'.join(MANDATORY_STATIONS)}"
+        else:
+            route_description = "all routes"
+        
+        print(f"Summary for {month_str}: Analyzed {len(filtered_train_data)} trains on {route_description} with {total_month_delays} delays out of {total_month_schedules} schedules from {total_month_trains} total trains.")
         
         return filtered_train_data
 
