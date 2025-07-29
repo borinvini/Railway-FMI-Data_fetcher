@@ -12,6 +12,11 @@ DELAY_LONG_DISTANCE_TRAINS = 5
 FILTER_BY_ROUTE = True  # Set to True to filter trains by mandatory stations, False to include all trains
 MANDATORY_STATIONS = ["HKI", "OL", "ROI"]  # Helsinki, Oulu, and Rovaniemi - trains must pass through ALL these stations
 
+# Train filtering parameters
+FILTER_BY_TRAIN_CATEGORY = True  # Set to True to filter. False to include all train categories
+TRAIN_CATEGORY_FILTER = "Long-distance"
+# Available train categories: "Long-distance", "Commuter", "Cargo", "Locomotive", "Test drive", "On-track machines", "Shunting"
+
 # 
 FMI_BBOX = "18,55,35,75" # Bounding box for Finland
 #FMI_BBOX = "20.8,59.4,27.2,67.6"

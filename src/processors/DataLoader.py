@@ -7,7 +7,7 @@ import pandas as pd
 from glob import glob
 from haversine import haversine, Unit
 from collections import Counter
-from config.const import ALTERNATIVE_WEATHER_COLUMN, ALTERNATIVE_WEATHER_RADIUS_KM, CSV_ALL_TRAINS, CSV_CLOSEST_EMS_TRAIN, CSV_DELAY_TABLE_EACH_STATION, CSV_DELAY_TABLE_OFFSET, CSV_DELAY_TABLE_ORIGINAL, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_TRAIN_STATIONS, DELAY_LONG_DISTANCE_TRAINS, FILTER_BY_ROUTE, FOLDER_NAME, MANDATORY_STATIONS
+from config.const import ALTERNATIVE_WEATHER_COLUMN, ALTERNATIVE_WEATHER_RADIUS_KM, CSV_ALL_TRAINS, CSV_CLOSEST_EMS_TRAIN, CSV_DELAY_TABLE_EACH_STATION, CSV_DELAY_TABLE_OFFSET, CSV_DELAY_TABLE_ORIGINAL, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_TRAIN_STATIONS, DELAY_LONG_DISTANCE_TRAINS, FILTER_BY_ROUTE, FILTER_BY_TRAIN_CATEGORY, FOLDER_NAME, MANDATORY_STATIONS, TRAIN_CATEGORY_FILTER
 from config.const import send_email
 
 class DataLoader:
@@ -436,12 +436,35 @@ class DataLoader:
             print(f"⚠️ EMS metadata file not found. Snow depth alternative search will be disabled.")
             self.ems_metadata = pd.DataFrame()
 
-        # STEP 1: Filter trains based on route filtering setting
+        # STEP 1: Filter trains by train category (if enabled)
+        if FILTER_BY_TRAIN_CATEGORY:
+            print(f"🔍 Filtering trains by trainCategory = '{TRAIN_CATEGORY_FILTER}'")
+            initial_count = len(train_data)
+            
+            # Filter for specified train category
+            category_filtered_train_data = train_data[train_data['trainCategory'] == TRAIN_CATEGORY_FILTER].copy()
+            category_filtered_count = len(category_filtered_train_data)
+            
+            print(f"✅ Filtered from {initial_count} to {category_filtered_count} {TRAIN_CATEGORY_FILTER.lower()} trains.")
+            
+            if category_filtered_train_data.empty:
+                print(f"⚠️ No {TRAIN_CATEGORY_FILTER.lower()} trains found for {month_str}")
+                return category_filtered_train_data
+            
+            working_train_data = category_filtered_train_data
+            train_type_description = TRAIN_CATEGORY_FILTER.lower()
+        else:
+            # Include all train categories
+            working_train_data = train_data.copy()
+            train_type_description = "all"
+            print(f"✅ Processing all {len(working_train_data)} trains (train category filtering disabled).")
+
+        # STEP 2: Filter trains based on route filtering setting (if enabled)
         if FILTER_BY_ROUTE and MANDATORY_STATIONS:
-            print(f"🔍 Filtering trains that pass through mandatory stations: {MANDATORY_STATIONS}")
+            print(f"🔍 Further filtering {train_type_description} trains that pass through mandatory stations: {MANDATORY_STATIONS}")
             filtered_train_indices = []
             
-            for idx, train_row in train_data.iterrows():
+            for idx, train_row in working_train_data.iterrows():
                 train_number = train_row.trainNumber
                 timetable = train_row.timeTableRows
 
@@ -474,21 +497,21 @@ class DataLoader:
                 if passes_through_mandatory_stations:
                     filtered_train_indices.append(idx)
 
-            # Filter the train_data to only include trains that pass through mandatory stations
-            filtered_train_data = train_data.loc[filtered_train_indices].copy()
-            print(f"✅ Filtered from {len(train_data)} to {len(filtered_train_data)} trains that pass through mandatory stations.")
+            # Filter the working_train_data to only include trains that pass through mandatory stations
+            filtered_train_data = working_train_data.loc[filtered_train_indices].copy()
+            print(f"✅ Further filtered from {len(working_train_data)} to {len(filtered_train_data)} {train_type_description} trains that pass through mandatory stations.")
             
             # If no trains pass through mandatory stations, return empty DataFrame
             if filtered_train_data.empty:
-                print(f"⚠️ No trains found that pass through all mandatory stations for {month_str}")
+                print(f"⚠️ No {train_type_description} trains found that pass through all mandatory stations for {month_str}")
                 return filtered_train_data
         else:
-            # Include all trains (no filtering)
-            filtered_train_data = train_data.copy()
+            # Include all trains from the category filter (no route filtering)
+            filtered_train_data = working_train_data.copy()
             if FILTER_BY_ROUTE:
-                print(f"✅ Processing all {len(filtered_train_data)} trains (no mandatory stations specified).")
+                print(f"✅ Processing all {len(filtered_train_data)} {train_type_description} trains (no mandatory stations specified).")
             else:
-                print(f"✅ Processing all {len(filtered_train_data)} trains (route filtering disabled).")
+                print(f"✅ Processing all {len(filtered_train_data)} {train_type_description} trains (route filtering disabled).")
 
         # Extract unique departure dates from filtered data
         unique_dates = filtered_train_data["departureDate"].unique()
@@ -618,11 +641,19 @@ class DataLoader:
         # Save the merged data for the specific month
         self.save_monthly_data_to_csv(filtered_train_data, month_str)
         
-        # Update print statement based on filtering
-        if FILTER_BY_ROUTE and MANDATORY_STATIONS:
-            print(f"\n✅ Merged data for {month_str} saved successfully! Only trains passing through {MANDATORY_STATIONS} included.")
+        # Update print statement based on filtering settings
+        filter_description = ""
+        if FILTER_BY_TRAIN_CATEGORY:
+            filter_description += f"{train_type_description} trains"
+            if FILTER_BY_ROUTE and MANDATORY_STATIONS:
+                filter_description += f" passing through {MANDATORY_STATIONS}"
         else:
-            print(f"\n✅ Merged data for {month_str} saved successfully! All trains included.")
+            if FILTER_BY_ROUTE and MANDATORY_STATIONS:
+                filter_description += f"trains passing through {MANDATORY_STATIONS}"
+            else:
+                filter_description += "all trains"
+        
+        print(f"\n✅ Merged data for {month_str} saved successfully! Only {filter_description} included.")
         
         # Track delays for all 3 delay columns using the helper method
         print(f"\n📊 Tracking delays for all 3 delay columns for {month_str}...")
