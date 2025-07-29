@@ -15,6 +15,9 @@ class FMIDataFetcher:
         self.ems_url = FMI_EMS
         self.output_folder = FOLDER_NAME
 
+        # Ensure the output folder exists
+        os.makedirs(self.output_folder, exist_ok=True)
+
     def save_to_csv(self, df, filename):
         """
         Save a DataFrame to a CSV file inside the FOLDER_NAME directory.
