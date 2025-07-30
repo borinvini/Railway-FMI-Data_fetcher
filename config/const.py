@@ -1,15 +1,12 @@
 # PARAMETERS
 START_DATE = "2024-11-30" # YYYY-MM-DD
 END_DATE = "2024-12-02" # YYYY-MM-DD
-CATEGORY = "All Categories" 
-OPERATOR = "All Operators"
 
 # Delay threshold (in minutes) for considering a stop as delayed
-FILTER_BY_ROUTE = []
 DELAY_LONG_DISTANCE_TRAINS = 5
 
 # List of mandatory stations for long-distance train route analysis
-FILTER_BY_ROUTE = True  # Set to True to filter trains by mandatory stations, False to include all trains
+FILTER_BY_ROUTE = False  # Set to True to filter trains by mandatory stations, False to include all trains
 MANDATORY_STATIONS = ["HKI", "OL", "ROI"]  # Helsinki, Oulu, and Rovaniemi - trains must pass through ALL these stations
 
 # Train filtering parameters
