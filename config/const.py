@@ -1,6 +1,6 @@
 # PARAMETERS
-START_DATE = "2024-11-30" # YYYY-MM-DD
-END_DATE = "2024-12-02" # YYYY-MM-DD
+START_DATE = "2024-01-01" # YYYY-MM-DD
+END_DATE = "2024-01-01" # YYYY-MM-DD
 
 # Delay threshold (in minutes) for considering a stop as delayed
 DELAY_LONG_DISTANCE_TRAINS = 5

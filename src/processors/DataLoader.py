@@ -822,8 +822,23 @@ class DataLoader:
             closest_idx = idx if after < before else idx - 1
 
         closest_row = station_weather_df.iloc[closest_idx]
-        weather_dict = closest_row.drop(["station_name", "timestamp"]).to_dict()
+
+        weather_dict = closest_row.drop(["station_name"]).to_dict()
         weather_dict = {"closest_ems": closest_row["station_name"], **weather_dict}
+
+        # Convert the timestamp to the same format as other timestamps (ISO format with Z)
+        if "timestamp" in weather_dict:
+            timestamp_value = weather_dict["timestamp"]
+            if pd.notna(timestamp_value):
+                # Convert Pandas Timestamp to ISO format string with milliseconds and Z
+                weather_dict["weather_timestamp"] = timestamp_value.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+            else:
+                weather_dict["weather_timestamp"] = None
+            # Remove the original timestamp key
+            del weather_dict["timestamp"]
+    
+        weather_dict = {"closest_ems": closest_row["station_name"], **weather_dict}
+
 
         # Ensure ALTERNATIVE_WEATHER_COLUMN is a list
         weather_features = ALTERNATIVE_WEATHER_COLUMN if isinstance(ALTERNATIVE_WEATHER_COLUMN, list) else [ALTERNATIVE_WEATHER_COLUMN]
