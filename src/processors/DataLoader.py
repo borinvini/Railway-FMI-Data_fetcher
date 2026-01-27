@@ -369,6 +369,21 @@ class DataLoader:
                 valid_count = weather_data[col_names['max']].notna().sum()
                 print(f"     {param}: {valid_count} valid rolling stats")
             
+            # Show missing values and zeros for each new rolling feature
+            print(f"\n  📊 Missing Values & Zeros Report for New Features:")
+            print(f"     {'Feature':<45} | {'Missing':>10} | {'Zeros':>10}")
+            print(f"     {'-'*45}-+-{'-'*10}-+-{'-'*10}")
+            
+            for param in available_params:
+                col_names = get_fmi_rolling_column_names(param)
+                for stat_type, col_name in col_names.items():
+                    if col_name in weather_data.columns:
+                        missing_count = weather_data[col_name].isna().sum()
+                        zero_count = (weather_data[col_name] == 0).sum()
+                        print(f"     {col_name:<45} | {missing_count:>10} | {zero_count:>10}")
+            
+            print()
+            
             # Show sample of the new columns for first available parameter
             first_param = available_params[0]
             first_col_names = get_fmi_rolling_column_names(first_param)

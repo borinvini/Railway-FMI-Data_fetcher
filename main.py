@@ -70,10 +70,10 @@ else:
         # it includes all measurements from T-{window} to T (inclusive).
         # The FMI data is at 10-minute intervals, so typically 7 data points per window.
         # ============================================================
-        print("\n" + "="*60)
-        print("STEP 1: Preprocessing FMI Rolling Window Features")
-        print("="*60)
-        data_loader.preprocess_fmi_rolling_features()
+        #print("\n" + "="*60)
+        #print("STEP 1: Preprocessing FMI Rolling Window Features")
+        #print("="*60)
+        #data_loader.preprocess_fmi_rolling_features()
 
         # ============================================================
         # STEP 2: Match train stations with closest EMS weather stations
