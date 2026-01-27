@@ -22,6 +22,14 @@ FMI_BBOX = "18,55,35,75" # Bounding box for Finland
 ALTERNATIVE_WEATHER_COLUMN = ["Snow depth", "Precipitation amount", "Precipitation intensity", "Horizontal visibility", "Wind speed", "Gust speed"] # Target column name for alternative search
 ALTERNATIVE_WEATHER_RADIUS_KM = 50  # Maximum radius in kilometers for alternative weather station search
 
+# FMI Weather preprocessing parameters
+FMI_ROLLING_WINDOW_HOURS = 1  # Rolling window size in hours
+FMI_TEMP_COLUMN = "Air temperature"  # Source column
+
+# New temperature feature column names
+FMI_TEMP_1H_MAX = "Air temperature (1h max)"
+FMI_TEMP_1H_MIN = "Air temperature (1h min)"
+FMI_TEMP_1H_MEAN = "Air temperature (1h mean)"
 
 # URLs for the Finnish Meteorological Institute API
 FMI_OBSERVATIONS = "fmi::observations::weather::multipointcoverage"

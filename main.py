@@ -47,11 +47,43 @@ else:
         data_loader = DataLoader()
         print("\n✅ DataLoader initialized successfully.")
 
-        # Call the match method only if the class creation is successful
+        # ============================================================
+        # STEP 1: Preprocess FMI weather data to add rolling temperature features
+        # ============================================================
+        # This step adds 3 new columns to each FMI weather CSV file:
+        # - Air temperature (1h max): Highest temperature in the last 1-hour window
+        # - Air temperature (1h min): Lowest temperature in the last 1-hour window
+        # - Air temperature (1h mean): Mean temperature in the last 1-hour window
+        #
+        # The rolling window is a lookback window - for each measurement timestamp T,
+        # it includes all measurements from T-1hour to T (inclusive).
+        # The FMI data is at 10-minute intervals, so typically 7 data points per window.
+        # ============================================================
+        print("\n" + "="*60)
+        print("STEP 1: Preprocessing FMI Temperature Features")
+        print("="*60)
+        data_loader.preprocess_fmi_temperature_features()
+
+        # ============================================================
+        # STEP 2: Match train stations with closest EMS weather stations
+        # ============================================================
+        print("\n" + "="*60)
+        print("STEP 2: Matching Train Stations with EMS Weather Stations")
+        print("="*60)
         merged_data = data_loader.match_train_with_ems()
         print(merged_data.head())
 
+        # ============================================================
+        # STEP 3: Load and merge train-weather data by month
+        # ============================================================
+        print("\n" + "="*60)
+        print("STEP 3: Loading and Merging Train-Weather Data by Month")
+        print("="*60)
         data_loader.load_csv_files_by_month()
+
+        print("\n" + "="*60)
+        print("✅ ALL PROCESSING COMPLETE!")
+        print("="*60)
 
     except Exception as e:
         print(f"\n❌ Error: {e}")
