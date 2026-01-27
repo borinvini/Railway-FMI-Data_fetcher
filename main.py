@@ -48,21 +48,32 @@ else:
         print("\n✅ DataLoader initialized successfully.")
 
         # ============================================================
-        # STEP 1: Preprocess FMI weather data to add rolling temperature features
+        # STEP 1: Preprocess FMI weather data to add rolling window features
         # ============================================================
-        # This step adds 3 new columns to each FMI weather CSV file:
-        # - Air temperature (1h max): Highest temperature in the last 1-hour window
-        # - Air temperature (1h min): Lowest temperature in the last 1-hour window
-        # - Air temperature (1h mean): Mean temperature in the last 1-hour window
+        # This step adds rolling window statistics (max, min, mean) for 
+        # multiple weather parameters defined in FMI_ROLLING_WINDOW_PARAMS:
+        # - Air temperature
+        # - Wind speed
+        # - Relative humidity
+        # - Precipitation intensity
+        # - Snow depth
+        # - Pressure (msl)
+        # - Horizontal visibility
+        # - Cloud amount
+        #
+        # For each parameter, 3 new columns are created:
+        # - {parameter} ({window}h max): Highest value in the rolling window
+        # - {parameter} ({window}h min): Lowest value in the rolling window
+        # - {parameter} ({window}h mean): Mean value in the rolling window
         #
         # The rolling window is a lookback window - for each measurement timestamp T,
-        # it includes all measurements from T-1hour to T (inclusive).
+        # it includes all measurements from T-{window} to T (inclusive).
         # The FMI data is at 10-minute intervals, so typically 7 data points per window.
         # ============================================================
         print("\n" + "="*60)
-        print("STEP 1: Preprocessing FMI Temperature Features")
+        print("STEP 1: Preprocessing FMI Rolling Window Features")
         print("="*60)
-        data_loader.preprocess_fmi_temperature_features()
+        data_loader.preprocess_fmi_rolling_features()
 
         # ============================================================
         # STEP 2: Match train stations with closest EMS weather stations

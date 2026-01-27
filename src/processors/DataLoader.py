@@ -7,7 +7,7 @@ import pandas as pd
 from glob import glob
 from haversine import haversine, Unit
 from collections import Counter
-from config.const import ALTERNATIVE_WEATHER_COLUMN, ALTERNATIVE_WEATHER_RADIUS_KM, CSV_ALL_TRAINS, CSV_CLOSEST_EMS_TRAIN, CSV_DELAY_TABLE_EACH_STATION, CSV_DELAY_TABLE_OFFSET, CSV_DELAY_TABLE_ORIGINAL, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_TRAIN_STATIONS, DELAY_LONG_DISTANCE_TRAINS, FILTER_BY_ROUTE, FILTER_BY_TRAIN_CATEGORY, FMI_ROLLING_WINDOW_HOURS, FMI_TEMP_1H_MAX, FMI_TEMP_1H_MEAN, FMI_TEMP_1H_MIN, FMI_TEMP_COLUMN, FOLDER_NAME, MANDATORY_STATIONS, TRAIN_CATEGORY_FILTER
+from config.const import ALTERNATIVE_WEATHER_COLUMN, ALTERNATIVE_WEATHER_RADIUS_KM, CSV_ALL_TRAINS, CSV_CLOSEST_EMS_TRAIN, CSV_DELAY_TABLE_EACH_STATION, CSV_DELAY_TABLE_OFFSET, CSV_DELAY_TABLE_ORIGINAL, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_TRAIN_STATIONS, DELAY_LONG_DISTANCE_TRAINS, FILTER_BY_ROUTE, FILTER_BY_TRAIN_CATEGORY, FMI_ROLLING_WINDOW_HOURS, FMI_ROLLING_WINDOW_PARAMS, FOLDER_NAME, MANDATORY_STATIONS, TRAIN_CATEGORY_FILTER, get_fmi_rolling_column_names
 from config.const import send_email
 
 class DataLoader:
@@ -116,21 +116,31 @@ class DataLoader:
                 dates.append(f"{year}-{month}")
         return dates
     
-    def preprocess_fmi_temperature_features(self):
+    def preprocess_fmi_rolling_features(self):
         """
-        Preprocesses FMI weather data to add rolling 1-hour temperature statistics.
+        Preprocesses FMI weather data to add rolling window statistics for multiple weather parameters.
         
         For each measurement timestamp, calculates statistics using data from the 
-        previous 1-hour window (lookback). This accounts for the shifting nature 
+        previous rolling window (lookback). This accounts for the shifting nature 
         of the rolling window for every measurement.
         
         For months 02-12, uses the last hour of data from the previous month's file
         to ensure proper rolling window calculations at the start of each month.
         
-        Creates new columns:
-        - Air temperature (1h max): Highest temperature in the last 1-hour window
-        - Air temperature (1h min): Lowest temperature in the last 1-hour window  
-        - Air temperature (1h mean): Mean temperature in the last 1-hour window
+        Parameters processed (defined in FMI_ROLLING_WINDOW_PARAMS):
+        - Air temperature
+        - Wind speed
+        - Relative humidity
+        - Precipitation intensity
+        - Snow depth
+        - Pressure (msl)
+        - Horizontal visibility
+        - Cloud amount
+        
+        For each parameter, creates new columns:
+        - {parameter} ({window}h max): Highest value in the rolling window
+        - {parameter} ({window}h min): Lowest value in the rolling window  
+        - {parameter} ({window}h mean): Mean value in the rolling window
         
         The FMI data is at 10-minute intervals, so a 1-hour window typically 
         includes up to 7 data points (current + 6 previous measurements).
@@ -142,14 +152,16 @@ class DataLoader:
             raise ValueError("No weather files loaded. Cannot preprocess FMI data.")
         
         print(f"\n{'='*60}")
-        print(f"🌡️  PREPROCESSING FMI TEMPERATURE FEATURES")
+        print(f"🌡️  PREPROCESSING FMI ROLLING WINDOW FEATURES")
         print(f"{'='*60}")
         print(f"Rolling window: {FMI_ROLLING_WINDOW_HOURS} hour(s)")
-        print(f"Source column: {FMI_TEMP_COLUMN}")
-        print(f"New columns to create:")
-        print(f"  - {FMI_TEMP_1H_MAX}")
-        print(f"  - {FMI_TEMP_1H_MIN}")
-        print(f"  - {FMI_TEMP_1H_MEAN}")
+        print(f"\nParameters to process ({len(FMI_ROLLING_WINDOW_PARAMS)} total):")
+        for param in FMI_ROLLING_WINDOW_PARAMS:
+            col_names = get_fmi_rolling_column_names(param)
+            print(f"  - {param}")
+            print(f"      → {col_names['max']}")
+            print(f"      → {col_names['min']}")
+            print(f"      → {col_names['mean']}")
         print(f"{'='*60}\n")
         
         # Sort weather files chronologically
@@ -180,16 +192,24 @@ class DataLoader:
             # Ensure timestamp is in datetime format
             weather_data["timestamp"] = pd.to_datetime(weather_data["timestamp"], errors="coerce")
             
-            # Check if temperature column exists
-            if FMI_TEMP_COLUMN not in weather_data.columns:
-                print(f"  ⚠️ Column '{FMI_TEMP_COLUMN}' not found in {weather_file}. Skipping...")
+            # Check which parameters exist in the data
+            available_params = [p for p in FMI_ROLLING_WINDOW_PARAMS if p in weather_data.columns]
+            missing_params = [p for p in FMI_ROLLING_WINDOW_PARAMS if p not in weather_data.columns]
+            
+            if missing_params:
+                print(f"  ⚠️ Missing columns: {missing_params}")
+            
+            if not available_params:
+                print(f"  ⚠️ No target parameters found in {weather_file}. Skipping...")
                 previous_month_data = None
                 previous_month_str = current_month_str
                 continue
             
-            # Check if columns already exist (to avoid reprocessing)
-            if FMI_TEMP_1H_MAX in weather_data.columns:
-                print(f"  ℹ️ Temperature features already exist. Skipping...")
+            # Check if rolling columns already exist (to avoid reprocessing)
+            first_param = available_params[0]
+            first_col_names = get_fmi_rolling_column_names(first_param)
+            if first_col_names['max'] in weather_data.columns:
+                print(f"  ℹ️ Rolling features already exist. Skipping...")
                 # Still need to store this month's last hour for next month
                 weather_data_sorted = weather_data.sort_values(by=["timestamp"]).reset_index(drop=True)
                 max_timestamp = weather_data_sorted["timestamp"].max()
@@ -213,9 +233,12 @@ class DataLoader:
                 cutoff_time = prev_max_timestamp - pd.Timedelta(hours=FMI_ROLLING_WINDOW_HOURS)
                 prev_last_hour = previous_month_data[previous_month_data["timestamp"] > cutoff_time].copy()
                 
-                # Remove the temperature feature columns from previous month if they exist
-                # (they shouldn't exist if we're processing in order, but just in case)
-                cols_to_remove = [FMI_TEMP_1H_MAX, FMI_TEMP_1H_MIN, FMI_TEMP_1H_MEAN, "_is_current_month"]
+                # Remove rolling feature columns from previous month if they exist
+                cols_to_remove = ["_is_current_month"]
+                for param in FMI_ROLLING_WINDOW_PARAMS:
+                    col_names = get_fmi_rolling_column_names(param)
+                    cols_to_remove.extend([col_names['max'], col_names['min'], col_names['mean']])
+                
                 for col in cols_to_remove:
                     if col in prev_last_hour.columns:
                         prev_last_hour = prev_last_hour.drop(columns=[col])
@@ -231,17 +254,17 @@ class DataLoader:
             
             # Get unique stations for progress tracking
             unique_stations = weather_data["station_name"].nunique()
-            print(f"  📍 Processing {unique_stations} weather stations...")
+            print(f"  📍 Processing {unique_stations} weather stations for {len(available_params)} parameters...")
             
-            # Define function to calculate rolling temperature statistics per station
-            def calculate_rolling_temp_stats(group):
+            # Define function to calculate rolling statistics per station
+            def calculate_rolling_stats(group):
                 """
-                Calculate rolling 1-hour temperature statistics for a single station.
+                Calculate rolling window statistics for all parameters for a single station.
                 
                 The rolling window is a lookback window - for timestamp T, it includes
-                all measurements from approximately T-1hour to T.
+                all measurements from approximately T-{window} to T.
                 """
-                # Store station name from groupby key (accessible via .name attribute)
+                # Store station name from groupby key
                 station_name = group.name
                 
                 # Store the _is_current_month column before processing
@@ -253,29 +276,32 @@ class DataLoader:
                 # Sort index to ensure proper time ordering
                 group = group.sort_index()
                 
-                # Calculate rolling window string (e.g., "1h" for 1 hour)
+                # Calculate rolling window string
                 window_str = f"{FMI_ROLLING_WINDOW_HOURS}h"
                 
-                # Calculate rolling statistics
-                # min_periods=1 ensures we get values even at the start of the time series
-                # The rolling window looks back from the current timestamp
-                group[FMI_TEMP_1H_MAX] = group[FMI_TEMP_COLUMN].rolling(
-                    window=window_str, 
-                    min_periods=1
-                ).max()
-                
-                group[FMI_TEMP_1H_MIN] = group[FMI_TEMP_COLUMN].rolling(
-                    window=window_str, 
-                    min_periods=1
-                ).min()
-                
-                group[FMI_TEMP_1H_MEAN] = group[FMI_TEMP_COLUMN].rolling(
-                    window=window_str, 
-                    min_periods=1
-                ).mean()
-                
-                # Round mean to 2 decimal places for cleaner output
-                group[FMI_TEMP_1H_MEAN] = group[FMI_TEMP_1H_MEAN].round(2)
+                # Process each parameter
+                for param in available_params:
+                    col_names = get_fmi_rolling_column_names(param)
+                    
+                    # Calculate rolling statistics
+                    # min_periods=1 ensures we get values even at the start of the time series
+                    group[col_names['max']] = group[param].rolling(
+                        window=window_str, 
+                        min_periods=1
+                    ).max()
+                    
+                    group[col_names['min']] = group[param].rolling(
+                        window=window_str, 
+                        min_periods=1
+                    ).min()
+                    
+                    group[col_names['mean']] = group[param].rolling(
+                        window=window_str, 
+                        min_periods=1
+                    ).mean()
+                    
+                    # Round mean to 2 decimal places for cleaner output
+                    group[col_names['mean']] = group[col_names['mean']].round(2)
                 
                 # Reset index to restore timestamp as column
                 group = group.reset_index()
@@ -290,7 +316,7 @@ class DataLoader:
             
             # Apply the rolling calculation to each station group
             weather_data = weather_data.groupby("station_name", group_keys=False).apply(
-                calculate_rolling_temp_stats
+                calculate_rolling_stats
             )
             
             # Store last hour of current month for next iteration BEFORE filtering
@@ -309,7 +335,12 @@ class DataLoader:
             # Restore original column order with new columns at the end
             # First, get the original columns (excluding the new ones)
             original_cols = [col for col in pd.read_csv(weather_file, nrows=0).columns]
-            new_cols = [FMI_TEMP_1H_MAX, FMI_TEMP_1H_MIN, FMI_TEMP_1H_MEAN]
+            
+            # Build list of new columns in order
+            new_cols = []
+            for param in available_params:
+                col_names = get_fmi_rolling_column_names(param)
+                new_cols.extend([col_names['max'], col_names['min'], col_names['mean']])
             
             # Reorder columns: original columns + new columns
             final_cols = original_cols + new_cols
@@ -326,36 +357,38 @@ class DataLoader:
             if original_row_count != final_row_count:
                 print(f"  ⚠️ Row count mismatch: {original_row_count} -> {final_row_count}")
             
-            # Calculate statistics for validation
-            valid_max = weather_data[FMI_TEMP_1H_MAX].notna().sum()
-            valid_min = weather_data[FMI_TEMP_1H_MIN].notna().sum()
-            valid_mean = weather_data[FMI_TEMP_1H_MEAN].notna().sum()
-            
             # Save back to CSV
             weather_data.to_csv(weather_file, index=False)
             
-            print(f"  ✅ Saved: {final_row_count} rows")
-            print(f"     Valid temperature stats: max={valid_max}, min={valid_min}, mean={valid_mean}")
+            # Calculate and display statistics for validation
+            print(f"  ✅ Saved: {final_row_count} rows with {len(new_cols)} new columns")
             
-            # Show sample of the new columns
-            sample_with_temp = weather_data[weather_data[FMI_TEMP_COLUMN].notna()].head(3)
-            if not sample_with_temp.empty:
-                print(f"  📋 Sample data:")
-                sample_cols = ["timestamp", "station_name", FMI_TEMP_COLUMN, 
-                               FMI_TEMP_1H_MAX, FMI_TEMP_1H_MIN, FMI_TEMP_1H_MEAN]
-                sample_cols = [c for c in sample_cols if c in sample_with_temp.columns]
-                for _, row in sample_with_temp[sample_cols].iterrows():
+            # Show validation stats for each parameter
+            for param in available_params:
+                col_names = get_fmi_rolling_column_names(param)
+                valid_count = weather_data[col_names['max']].notna().sum()
+                print(f"     {param}: {valid_count} valid rolling stats")
+            
+            # Show sample of the new columns for first available parameter
+            first_param = available_params[0]
+            first_col_names = get_fmi_rolling_column_names(first_param)
+            sample_with_data = weather_data[weather_data[first_param].notna()].head(2)
+            if not sample_with_data.empty:
+                print(f"  📋 Sample data ({first_param}):")
+                for _, row in sample_with_data.iterrows():
                     print(f"     {row['timestamp']} | {row['station_name'][:20]:<20} | "
-                          f"Temp: {row[FMI_TEMP_COLUMN]:>6.1f} | "
-                          f"Max: {row[FMI_TEMP_1H_MAX]:>6.1f} | "
-                          f"Min: {row[FMI_TEMP_1H_MIN]:>6.1f} | "
-                          f"Mean: {row[FMI_TEMP_1H_MEAN]:>6.2f}")
+                          f"Val: {row[first_param]:>7.1f} | "
+                          f"Max: {row[first_col_names['max']]:>7.1f} | "
+                          f"Min: {row[first_col_names['min']]:>7.1f} | "
+                          f"Mean: {row[first_col_names['mean']]:>7.2f}")
             print()
         
         print(f"{'='*60}")
-        print(f"✅ FMI TEMPERATURE PREPROCESSING COMPLETE")
+        print(f"✅ FMI ROLLING WINDOW PREPROCESSING COMPLETE")
+        print(f"   Processed {len(FMI_ROLLING_WINDOW_PARAMS)} parameters across {len(sorted_weather_files)} files")
         print(f"{'='*60}\n")
-    
+
+
     def _find_closest_ems(self, train_lat, train_long, ems_stations):
         """
         Finds the closest EMS station based on Haversine distance.

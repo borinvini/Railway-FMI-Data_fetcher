@@ -24,12 +24,44 @@ ALTERNATIVE_WEATHER_RADIUS_KM = 50  # Maximum radius in kilometers for alternati
 
 # FMI Weather preprocessing parameters
 FMI_ROLLING_WINDOW_HOURS = 1  # Rolling window size in hours
-FMI_TEMP_COLUMN = "Air temperature"  # Source column
+
+# Weather parameters to apply rolling window statistics (max, min, mean)
+FMI_ROLLING_WINDOW_PARAMS = [
+    "Air temperature",
+    "Wind speed",
+    "Relative humidity",
+    "Precipitation intensity",
+    "Snow depth",
+    "Pressure (msl)",
+    "Horizontal visibility",
+    "Cloud amount"
+]
+
+# Helper function to generate column names for rolling features
+def get_fmi_rolling_column_names(param_name, window_hours=None):
+    """
+    Generate standardized column names for rolling window statistics.
+    
+    Args:
+        param_name (str): The base parameter name (e.g., "Air temperature")
+        window_hours (int): The rolling window size in hours (defaults to FMI_ROLLING_WINDOW_HOURS)
+        
+    Returns:
+        dict: Dictionary with keys 'max', 'min', 'mean' and their column names
+    """
+    if window_hours is None:
+        window_hours = FMI_ROLLING_WINDOW_HOURS
+    return {
+        'max': f"{param_name} ({window_hours}h max)",
+        'min': f"{param_name} ({window_hours}h min)",
+        'mean': f"{param_name} ({window_hours}h mean)"
+    }
+
 
 # New temperature feature column names
-FMI_TEMP_1H_MAX = "Air temperature (1h max)"
-FMI_TEMP_1H_MIN = "Air temperature (1h min)"
-FMI_TEMP_1H_MEAN = "Air temperature (1h mean)"
+#FMI_TEMP_1H_MAX = "Air temperature (1h max)"
+#FMI_TEMP_1H_MIN = "Air temperature (1h min)"
+#FMI_TEMP_1H_MEAN = "Air temperature (1h mean)"
 
 # URLs for the Finnish Meteorological Institute API
 FMI_OBSERVATIONS = "fmi::observations::weather::multipointcoverage"
