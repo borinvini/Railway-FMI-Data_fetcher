@@ -23,9 +23,9 @@ ALTERNATIVE_WEATHER_COLUMN = ["Snow depth", "Precipitation amount", "Precipitati
 ALTERNATIVE_WEATHER_RADIUS_KM = 50  # Maximum radius in kilometers for alternative weather station search
 
 # FMI Weather preprocessing parameters
-FMI_ROLLING_WINDOW_HOURS = 1  # Rolling window size in hours
+FMI_ROLLING_WINDOW_HOURS = [12, 24, 72]  # Rolling window sizes in hours
 
-# Weather parameters to apply rolling window statistics (max, min, mean)
+# Weather parameters to apply rolling window statistics
 FMI_ROLLING_WINDOW_PARAMS = [
     "Air temperature",
     "Wind speed",
@@ -34,28 +34,35 @@ FMI_ROLLING_WINDOW_PARAMS = [
     "Snow depth",
     "Pressure (msl)",
     "Horizontal visibility",
-    "Cloud amount"
+    "Cloud amount",
+    "Precipitation amount"
 ]
 
+# Parameters that skip min/max (only get mean and cumulative)
+# Precipitation amount already represents 1h accumulated values
+FMI_ROLLING_SKIP_MIN_MAX = ["Precipitation amount"]
+
 # Helper function to generate column names for rolling features
-def get_fmi_rolling_column_names(param_name, window_hours=None):
+def get_fmi_rolling_column_names(param_name, window_hours, skip_min_max=False):
     """
     Generate standardized column names for rolling window statistics.
-    
+
     Args:
         param_name (str): The base parameter name (e.g., "Air temperature")
-        window_hours (int): The rolling window size in hours (defaults to FMI_ROLLING_WINDOW_HOURS)
-        
+        window_hours (int): The rolling window size in hours
+        skip_min_max (bool): If True, only return mean and cumulative keys
+
     Returns:
-        dict: Dictionary with keys 'max', 'min', 'mean' and their column names
+        dict: Dictionary with keys for each statistic and their column names
     """
-    if window_hours is None:
-        window_hours = FMI_ROLLING_WINDOW_HOURS
-    return {
-        'max': f"{param_name} ({window_hours}h max)",
-        'min': f"{param_name} ({window_hours}h min)",
-        'mean': f"{param_name} ({window_hours}h mean)"
+    names = {
+        'mean': f"{param_name} ({window_hours}h mean)",
+        'cumulative': f"{param_name} ({window_hours}h cumulative)"
     }
+    if not skip_min_max:
+        names['max'] = f"{param_name} ({window_hours}h max)"
+        names['min'] = f"{param_name} ({window_hours}h min)"
+    return names
 
 
 # New temperature feature column names
