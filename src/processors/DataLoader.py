@@ -260,58 +260,35 @@ class DataLoader:
             def calculate_rolling_stats(group):
                 """
                 Calculate rolling window statistics for all parameters for a single station.
-                
-                The rolling window is a lookback window - for timestamp T, it includes
-                all measurements from approximately T-{window} to T.
+
+                For each (parameter, window_size) combination, calculates max, min, mean, cumulative.
+                Parameters in FMI_ROLLING_SKIP_MIN_MAX only get mean and cumulative.
                 """
-                # Store station name from groupby key
                 station_name = group.name
-                
-                # Store the _is_current_month column before processing
                 is_current_month = group["_is_current_month"].values
-                
-                # Set timestamp as index for time-based rolling
+
                 group = group.set_index("timestamp")
-                
-                # Sort index to ensure proper time ordering
                 group = group.sort_index()
-                
-                # Calculate rolling window string
-                window_str = f"{FMI_ROLLING_WINDOW_HOURS}h"
-                
-                # Process each parameter
+
                 for param in available_params:
-                    col_names = get_fmi_rolling_column_names(param)
-                    
-                    # Calculate rolling statistics
-                    # min_periods=1 ensures we get values even at the start of the time series
-                    group[col_names['max']] = group[param].rolling(
-                        window=window_str, 
-                        min_periods=1
-                    ).max()
-                    
-                    group[col_names['min']] = group[param].rolling(
-                        window=window_str, 
-                        min_periods=1
-                    ).min()
-                    
-                    group[col_names['mean']] = group[param].rolling(
-                        window=window_str, 
-                        min_periods=1
-                    ).mean()
-                    
-                    # Round mean to 2 decimal places for cleaner output
-                    group[col_names['mean']] = group[col_names['mean']].round(2)
-                
-                # Reset index to restore timestamp as column
+                    skip = param in FMI_ROLLING_SKIP_MIN_MAX
+                    for wh in FMI_ROLLING_WINDOW_HOURS:
+                        col_names = get_fmi_rolling_column_names(param, wh, skip_min_max=skip)
+                        window_str = f"{wh}h"
+
+                        rolling = group[param].rolling(window=window_str, min_periods=1)
+
+                        if not skip:
+                            group[col_names['max']] = rolling.max()
+                            group[col_names['min']] = rolling.min()
+
+                        group[col_names['mean']] = rolling.mean().round(2)
+                        group[col_names['cumulative']] = rolling.sum().round(2)
+
                 group = group.reset_index()
-                
-                # Restore station_name column
                 group["station_name"] = station_name
-                
-                # Restore _is_current_month column
                 group["_is_current_month"] = is_current_month
-                
+
                 return group
             
             # Apply the rolling calculation to each station group
