@@ -119,49 +119,45 @@ class DataLoader:
     def preprocess_fmi_rolling_features(self):
         """
         Preprocesses FMI weather data to add rolling window statistics for multiple weather parameters.
-        
-        For each measurement timestamp, calculates statistics using data from the 
-        previous rolling window (lookback). This accounts for the shifting nature 
+
+        For each measurement timestamp, calculates statistics using data from the
+        previous rolling window (lookback). This accounts for the shifting nature
         of the rolling window for every measurement.
-        
-        For months 02-12, uses the last hour of data from the previous month's file
+
+        For months 02-12, uses the last 72 hours of data from the previous month's file
         to ensure proper rolling window calculations at the start of each month.
-        
+
         Parameters processed (defined in FMI_ROLLING_WINDOW_PARAMS):
-        - Air temperature
-        - Wind speed
-        - Relative humidity
-        - Precipitation intensity
-        - Snow depth
-        - Pressure (msl)
-        - Horizontal visibility
-        - Cloud amount
-        
-        For each parameter, creates new columns:
+        - Air temperature, Wind speed, Relative humidity, Precipitation intensity,
+          Snow depth, Pressure (msl), Horizontal visibility, Cloud amount, Precipitation amount
+
+        For each parameter and each window size (12h, 24h, 72h), creates new columns:
         - {parameter} ({window}h max): Highest value in the rolling window
-        - {parameter} ({window}h min): Lowest value in the rolling window  
+        - {parameter} ({window}h min): Lowest value in the rolling window
         - {parameter} ({window}h mean): Mean value in the rolling window
-        
-        The FMI data is at 10-minute intervals, so a 1-hour window typically 
-        includes up to 7 data points (current + 6 previous measurements).
-        
+        - {parameter} ({window}h cumulative): Sum of values in the rolling window
+
+        Parameters in FMI_ROLLING_SKIP_MIN_MAX only get mean and cumulative.
+
         Returns:
             None. Updates the weather CSV files in place.
         """
         if not self.weather_files:
             raise ValueError("No weather files loaded. Cannot preprocess FMI data.")
         
+        max_window = max(FMI_ROLLING_WINDOW_HOURS)
+
         print(f"\n{'='*60}")
         print(f"🌡️  PREPROCESSING FMI ROLLING WINDOW FEATURES")
         print(f"{'='*60}")
-        print(f"Rolling window: {FMI_ROLLING_WINDOW_HOURS} hour(s)")
+        print(f"Rolling windows: {FMI_ROLLING_WINDOW_HOURS} hours")
         print(f"\nParameters to process ({len(FMI_ROLLING_WINDOW_PARAMS)} total):")
         for param in FMI_ROLLING_WINDOW_PARAMS:
-            col_names = get_fmi_rolling_column_names(param)
-            print(f"  - {param}")
-            print(f"      → {col_names['max']}")
-            print(f"      → {col_names['min']}")
-            print(f"      → {col_names['mean']}")
+            skip = param in FMI_ROLLING_SKIP_MIN_MAX
+            for wh in FMI_ROLLING_WINDOW_HOURS:
+                col_names = get_fmi_rolling_column_names(param, wh, skip_min_max=skip)
+                for col_name in col_names.values():
+                    print(f"      → {col_name}")
         print(f"{'='*60}\n")
         
         # Sort weather files chronologically
@@ -207,13 +203,15 @@ class DataLoader:
             
             # Check if rolling columns already exist (to avoid reprocessing)
             first_param = available_params[0]
-            first_col_names = get_fmi_rolling_column_names(first_param)
-            if first_col_names['max'] in weather_data.columns:
+            first_skip = first_param in FMI_ROLLING_SKIP_MIN_MAX
+            first_col_names = get_fmi_rolling_column_names(first_param, FMI_ROLLING_WINDOW_HOURS[0], skip_min_max=first_skip)
+            first_check_col = first_col_names['mean']
+            if first_check_col in weather_data.columns:
                 print(f"  ℹ️ Rolling features already exist. Skipping...")
-                # Still need to store this month's last hour for next month
+                # Still need to store this month's last hours for next month
                 weather_data_sorted = weather_data.sort_values(by=["timestamp"]).reset_index(drop=True)
                 max_timestamp = weather_data_sorted["timestamp"].max()
-                cutoff_time = max_timestamp - pd.Timedelta(hours=FMI_ROLLING_WINDOW_HOURS)
+                cutoff_time = max_timestamp - pd.Timedelta(hours=max_window)
                 previous_month_data = weather_data_sorted[weather_data_sorted["timestamp"] > cutoff_time].copy()
                 previous_month_str = current_month_str
                 continue
@@ -224,20 +222,22 @@ class DataLoader:
             # Mark current month's data for later filtering
             weather_data["_is_current_month"] = True
             
-            # If we have previous month's data, prepend the last hour to current month
+            # If we have previous month's data, prepend the last 72h to current month
             if previous_month_data is not None and not previous_month_data.empty:
-                print(f"  🔗 Using last hour from previous month ({previous_month_str}) for window continuity")
-                
-                # Get the last hour of the previous month
+                print(f"  🔗 Using last {max_window}h from previous month ({previous_month_str}) for window continuity")
+
+                # Get the last max_window hours of the previous month
                 prev_max_timestamp = previous_month_data["timestamp"].max()
-                cutoff_time = prev_max_timestamp - pd.Timedelta(hours=FMI_ROLLING_WINDOW_HOURS)
+                cutoff_time = prev_max_timestamp - pd.Timedelta(hours=max_window)
                 prev_last_hour = previous_month_data[previous_month_data["timestamp"] > cutoff_time].copy()
-                
+
                 # Remove rolling feature columns from previous month if they exist
                 cols_to_remove = ["_is_current_month"]
                 for param in FMI_ROLLING_WINDOW_PARAMS:
-                    col_names = get_fmi_rolling_column_names(param)
-                    cols_to_remove.extend([col_names['max'], col_names['min'], col_names['mean']])
+                    skip = param in FMI_ROLLING_SKIP_MIN_MAX
+                    for wh in FMI_ROLLING_WINDOW_HOURS:
+                        col_names = get_fmi_rolling_column_names(param, wh, skip_min_max=skip)
+                        cols_to_remove.extend(col_names.values())
                 
                 for col in cols_to_remove:
                     if col in prev_last_hour.columns:
