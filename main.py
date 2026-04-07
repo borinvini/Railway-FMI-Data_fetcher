@@ -50,30 +50,14 @@ else:
         # ============================================================
         # STEP 1: Preprocess FMI weather data to add rolling window features
         # ============================================================
-        # This step adds rolling window statistics (max, min, mean) for 
-        # multiple weather parameters defined in FMI_ROLLING_WINDOW_PARAMS:
-        # - Air temperature
-        # - Wind speed
-        # - Relative humidity
-        # - Precipitation intensity
-        # - Snow depth
-        # - Pressure (msl)
-        # - Horizontal visibility
-        # - Cloud amount
-        #
-        # For each parameter, 3 new columns are created:
-        # - {parameter} ({window}h max): Highest value in the rolling window
-        # - {parameter} ({window}h min): Lowest value in the rolling window
-        # - {parameter} ({window}h mean): Mean value in the rolling window
-        #
-        # The rolling window is a lookback window - for each measurement timestamp T,
-        # it includes all measurements from T-{window} to T (inclusive).
-        # The FMI data is at 10-minute intervals, so typically 7 data points per window.
+        # This step adds rolling window statistics (max, min, mean, cumulative)
+        # for multiple weather parameters across 12h, 24h, and 72h windows.
+        # Precipitation amount only gets mean and cumulative (no min/max).
         # ============================================================
-        #print("\n" + "="*60)
-        #print("STEP 1: Preprocessing FMI Rolling Window Features")
-        #print("="*60)
-        #data_loader.preprocess_fmi_rolling_features()
+        print("\n" + "="*60)
+        print("STEP 1: Preprocessing FMI Rolling Window Features")
+        print("="*60)
+        data_loader.preprocess_fmi_rolling_features()
 
         # ============================================================
         # STEP 2: Match train stations with closest EMS weather stations
