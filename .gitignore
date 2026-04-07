@@ -41,5 +41,8 @@ secrets.json
 *.conda
 *.yml.lock
 
+# Ignore docs folder
+docs/
+
 # Ignore Git-specific files
 .git/

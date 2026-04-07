@@ -279,8 +279,8 @@ class DataLoader:
                         rolling = group[param].rolling(window=window_str, min_periods=1)
 
                         if not skip:
-                            group[col_names['max']] = rolling.max()
-                            group[col_names['min']] = rolling.min()
+                            group[col_names['max']] = rolling.max().round(2)
+                            group[col_names['min']] = rolling.min().round(2)
 
                         group[col_names['mean']] = rolling.mean().round(2)
                         group[col_names['cumulative']] = rolling.sum().round(2)

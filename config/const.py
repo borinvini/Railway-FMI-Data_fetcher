@@ -55,20 +55,14 @@ def get_fmi_rolling_column_names(param_name, window_hours, skip_min_max=False):
     Returns:
         dict: Dictionary with keys for each statistic and their column names
     """
-    names = {
-        'mean': f"{param_name} ({window_hours}h mean)",
-        'cumulative': f"{param_name} ({window_hours}h cumulative)"
-    }
+    names = {}
     if not skip_min_max:
         names['max'] = f"{param_name} ({window_hours}h max)"
         names['min'] = f"{param_name} ({window_hours}h min)"
+    names['mean'] = f"{param_name} ({window_hours}h mean)"
+    names['cumulative'] = f"{param_name} ({window_hours}h cumulative)"
     return names
 
-
-# New temperature feature column names
-#FMI_TEMP_1H_MAX = "Air temperature (1h max)"
-#FMI_TEMP_1H_MIN = "Air temperature (1h min)"
-#FMI_TEMP_1H_MEAN = "Air temperature (1h mean)"
 
 # URLs for the Finnish Meteorological Institute API
 FMI_OBSERVATIONS = "fmi::observations::weather::multipointcoverage"
