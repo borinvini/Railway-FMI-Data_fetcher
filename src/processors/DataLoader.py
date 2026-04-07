@@ -296,10 +296,10 @@ class DataLoader:
                 calculate_rolling_stats
             )
             
-            # Store last hour of current month for next iteration BEFORE filtering
+            # Store last max_window hours of current month for next iteration BEFORE filtering
             weather_data_for_next = weather_data[weather_data["_is_current_month"] == True].copy()
             max_timestamp = weather_data_for_next["timestamp"].max()
-            cutoff_time = max_timestamp - pd.Timedelta(hours=FMI_ROLLING_WINDOW_HOURS)
+            cutoff_time = max_timestamp - pd.Timedelta(hours=max_window)
             previous_month_data = weather_data_for_next[weather_data_for_next["timestamp"] > cutoff_time].copy()
             previous_month_str = current_month_str
             
@@ -313,11 +313,13 @@ class DataLoader:
             # First, get the original columns (excluding the new ones)
             original_cols = [col for col in pd.read_csv(weather_file, nrows=0).columns]
             
-            # Build list of new columns in order
+            # Build list of new columns in order (grouped by param, then by window)
             new_cols = []
             for param in available_params:
-                col_names = get_fmi_rolling_column_names(param)
-                new_cols.extend([col_names['max'], col_names['min'], col_names['mean']])
+                skip = param in FMI_ROLLING_SKIP_MIN_MAX
+                for wh in FMI_ROLLING_WINDOW_HOURS:
+                    col_names = get_fmi_rolling_column_names(param, wh, skip_min_max=skip)
+                    new_cols.extend(col_names.values())
             
             # Reorder columns: original columns + new columns
             final_cols = original_cols + new_cols
@@ -342,42 +344,47 @@ class DataLoader:
             
             # Show validation stats for each parameter
             for param in available_params:
-                col_names = get_fmi_rolling_column_names(param)
-                valid_count = weather_data[col_names['max']].notna().sum()
+                skip = param in FMI_ROLLING_SKIP_MIN_MAX
+                col_names = get_fmi_rolling_column_names(param, FMI_ROLLING_WINDOW_HOURS[0], skip_min_max=skip)
+                check_col = col_names['mean']
+                valid_count = weather_data[check_col].notna().sum()
                 print(f"     {param}: {valid_count} valid rolling stats")
-            
+
             # Show missing values and zeros for each new rolling feature
             print(f"\n  📊 Missing Values & Zeros Report for New Features:")
-            print(f"     {'Feature':<45} | {'Missing':>10} | {'Zeros':>10}")
-            print(f"     {'-'*45}-+-{'-'*10}-+-{'-'*10}")
-            
+            print(f"     {'Feature':<55} | {'Missing':>10} | {'Zeros':>10}")
+            print(f"     {'-'*55}-+-{'-'*10}-+-{'-'*10}")
+
             for param in available_params:
-                col_names = get_fmi_rolling_column_names(param)
-                for stat_type, col_name in col_names.items():
-                    if col_name in weather_data.columns:
-                        missing_count = weather_data[col_name].isna().sum()
-                        zero_count = (weather_data[col_name] == 0).sum()
-                        print(f"     {col_name:<45} | {missing_count:>10} | {zero_count:>10}")
-            
+                skip = param in FMI_ROLLING_SKIP_MIN_MAX
+                for wh in FMI_ROLLING_WINDOW_HOURS:
+                    col_names = get_fmi_rolling_column_names(param, wh, skip_min_max=skip)
+                    for stat_type, col_name in col_names.items():
+                        if col_name in weather_data.columns:
+                            missing_count = weather_data[col_name].isna().sum()
+                            zero_count = (weather_data[col_name] == 0).sum()
+                            print(f"     {col_name:<55} | {missing_count:>10} | {zero_count:>10}")
+
             print()
-            
+
             # Show sample of the new columns for first available parameter
             first_param = available_params[0]
-            first_col_names = get_fmi_rolling_column_names(first_param)
+            first_skip = first_param in FMI_ROLLING_SKIP_MIN_MAX
+            first_col_names = get_fmi_rolling_column_names(first_param, FMI_ROLLING_WINDOW_HOURS[0], skip_min_max=first_skip)
             sample_with_data = weather_data[weather_data[first_param].notna()].head(2)
             if not sample_with_data.empty:
-                print(f"  📋 Sample data ({first_param}):")
+                print(f"  📋 Sample data ({first_param}, {FMI_ROLLING_WINDOW_HOURS[0]}h window):")
                 for _, row in sample_with_data.iterrows():
-                    print(f"     {row['timestamp']} | {row['station_name'][:20]:<20} | "
-                          f"Val: {row[first_param]:>7.1f} | "
-                          f"Max: {row[first_col_names['max']]:>7.1f} | "
-                          f"Min: {row[first_col_names['min']]:>7.1f} | "
-                          f"Mean: {row[first_col_names['mean']]:>7.2f}")
+                    vals = f"Val: {row[first_param]:>7.1f}"
+                    if not first_skip:
+                        vals += f" | Max: {row[first_col_names['max']]:>7.1f} | Min: {row[first_col_names['min']]:>7.1f}"
+                    vals += f" | Mean: {row[first_col_names['mean']]:>7.2f} | Cum: {row[first_col_names['cumulative']]:>7.2f}"
+                    print(f"     {row['timestamp']} | {row['station_name'][:20]:<20} | {vals}")
             print()
         
         print(f"{'='*60}")
         print(f"✅ FMI ROLLING WINDOW PREPROCESSING COMPLETE")
-        print(f"   Processed {len(FMI_ROLLING_WINDOW_PARAMS)} parameters across {len(sorted_weather_files)} files")
+        print(f"   Processed {len(FMI_ROLLING_WINDOW_PARAMS)} parameters x {len(FMI_ROLLING_WINDOW_HOURS)} windows across {len(sorted_weather_files)} files")
         print(f"{'='*60}\n")
 
 
