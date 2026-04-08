@@ -7,7 +7,7 @@ import pandas as pd
 from glob import glob
 from haversine import haversine, Unit
 from collections import Counter
-from config.const import ALTERNATIVE_WEATHER_COLUMN, ALTERNATIVE_WEATHER_RADIUS_KM, CSV_ALL_TRAINS, CSV_CLOSEST_EMS_TRAIN, CSV_DELAY_TABLE_EACH_STATION, CSV_DELAY_TABLE_OFFSET, CSV_DELAY_TABLE_ORIGINAL, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_TRAIN_STATIONS, DELAY_LONG_DISTANCE_TRAINS, FILTER_BY_ROUTE, FILTER_BY_TRAIN_CATEGORY, FMI_ROLLING_WINDOW_HOURS, FMI_ROLLING_WINDOW_PARAMS, FMI_ROLLING_SKIP_MIN_MAX, FOLDER_NAME, MANDATORY_STATIONS, TRAIN_CATEGORY_FILTER, get_fmi_rolling_column_names
+from config.const import ALTERNATIVE_WEATHER_COLUMN, CSV_ALL_TRAINS, CSV_CLOSEST_EMS_TRAIN, CSV_TOP5_CLOSEST_EMS_TRAIN, CSV_DELAY_TABLE_EACH_STATION, CSV_DELAY_TABLE_OFFSET, CSV_DELAY_TABLE_ORIGINAL, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_TRAIN_STATIONS, DELAY_LONG_DISTANCE_TRAINS, FILTER_BY_ROUTE, FILTER_BY_TRAIN_CATEGORY, FMI_ROLLING_WINDOW_HOURS, FMI_ROLLING_WINDOW_PARAMS, FMI_ROLLING_SKIP_MIN_MAX, FOLDER_NAME, MANDATORY_STATIONS, TRAIN_CATEGORY_FILTER, get_fmi_rolling_column_names
 from config.const import send_email
 
 class DataLoader:
@@ -17,8 +17,9 @@ class DataLoader:
         self.train_files = None
         self.weather_files = None
         self.merged_metadata: pd.DataFrame = pd.DataFrame()  
-        self.ems_metadata: pd.DataFrame = pd.DataFrame()     
+        self.ems_metadata: pd.DataFrame = pd.DataFrame()
         self.ems_weather_dict: dict = {}                     # Store EMS station metadata for snow depth search
+        self.top5_ems_dict: dict = {}                        # Precomputed top-5 closest EMS per train station
 
         self._check_data_folder()
 
@@ -270,6 +271,7 @@ class DataLoader:
                 group = group.set_index("timestamp")
                 group = group.sort_index()
 
+                new_columns = {}
                 for param in available_params:
                     skip = param in FMI_ROLLING_SKIP_MIN_MAX
                     for wh in FMI_ROLLING_WINDOW_HOURS:
@@ -279,11 +281,13 @@ class DataLoader:
                         rolling = group[param].rolling(window=window_str, min_periods=1)
 
                         if not skip:
-                            group[col_names['max']] = rolling.max().round(2)
-                            group[col_names['min']] = rolling.min().round(2)
+                            new_columns[col_names['max']] = rolling.max().round(2)
+                            new_columns[col_names['min']] = rolling.min().round(2)
 
-                        group[col_names['mean']] = rolling.mean().round(2)
-                        group[col_names['cumulative']] = rolling.sum().round(2)
+                        new_columns[col_names['mean']] = rolling.mean().round(2)
+                        new_columns[col_names['cumulative']] = rolling.sum().round(2)
+
+                group = pd.concat([group, pd.DataFrame(new_columns, index=group.index)], axis=1)
 
                 group = group.reset_index()
                 group["station_name"] = station_name
@@ -420,6 +424,39 @@ class DataLoader:
 
         return closest_ems, closest_lat, closest_long, min_distance
 
+    def _find_top_n_closest_ems(self, train_lat, train_long, ems_stations, n=5):
+        """
+        Finds the top N closest EMS stations based on Haversine distance.
+
+        Parameters:
+            train_lat (float): Latitude of the train station.
+            train_long (float): Longitude of the train station.
+            ems_stations (pd.DataFrame): DataFrame containing EMS station data.
+            n (int): Number of closest stations to return.
+
+        Returns:
+            pd.Series: Flat series with columns ems_1_station, ems_1_lat, ems_1_long, ems_1_distance_km, ..., ems_N_*.
+        """
+        train_coords = (train_lat, train_long)
+        distances = []
+
+        for _, ems in ems_stations.iterrows():
+            ems_coords = (ems["latitude"], ems["longitude"])
+            distance = haversine(train_coords, ems_coords, unit=Unit.KILOMETERS)
+            distances.append((ems["station_name"], ems["latitude"], ems["longitude"], distance))
+
+        distances.sort(key=lambda x: x[3])
+        top_n = distances[:n]
+
+        result = {}
+        for i, (name, lat, lon, dist) in enumerate(top_n, start=1):
+            result[f"ems_{i}_station"] = name
+            result[f"ems_{i}_lat"] = lat
+            result[f"ems_{i}_long"] = lon
+            result[f"ems_{i}_distance_km"] = round(dist, 2)
+
+        return pd.Series(result)
+
     def match_train_with_ems(self) -> pd.DataFrame:
         """
         Matches each train station with the closest EMS station using the Haversine formula.
@@ -468,6 +505,18 @@ class DataLoader:
 
         # Save the merged data to CSV
         self.save_to_csv(self.merged_metadata, CSV_CLOSEST_EMS_TRAIN)
+
+        # Build top-5 closest EMS stations per train station (wide format)
+        top5_columns = self.merged_metadata[["train_station_name", "train_station_short_code", "train_lat", "train_long"]].copy()
+        top5_ems = self.merged_metadata.apply(
+            lambda row: self._find_top_n_closest_ems(row["train_lat"], row["train_long"], ems_stations, n=5),
+            axis=1
+        )
+        top5_metadata = pd.concat([top5_columns, top5_ems], axis=1)
+
+        print("✅ Top 5 closest EMS stations matched with train stations.")
+
+        self.save_to_csv(top5_metadata, CSV_TOP5_CLOSEST_EMS_TRAIN)
 
         return self.merged_metadata
 
@@ -708,6 +757,18 @@ class DataLoader:
             print(f"⚠️ EMS metadata file not found. Snow depth alternative search will be disabled.")
             self.ems_metadata = pd.DataFrame()
 
+        # Load precomputed top-5 closest EMS stations per train station
+        top5_path = os.path.join(self.data_folder, CSV_TOP5_CLOSEST_EMS_TRAIN)
+        if os.path.exists(top5_path):
+            top5_df = pd.read_csv(top5_path)
+            self.top5_ems_dict = {
+                row["train_station_short_code"]: row for _, row in top5_df.iterrows()
+            }
+            print(f"✅ Loaded top-5 EMS lookup with {len(self.top5_ems_dict)} train stations.")
+        else:
+            print(f"⚠️ Top-5 EMS file not found. Alternative weather search will fall back to brute force.")
+            self.top5_ems_dict = {}
+
         # STEP 1: Filter trains by train category (if enabled)
         if FILTER_BY_TRAIN_CATEGORY:
             print(f"🔍 Filtering trains by trainCategory = '{TRAIN_CATEGORY_FILTER}'")
@@ -890,15 +951,12 @@ class DataLoader:
 
                         if not closest_ems_row.empty:
                             closest_ems_station = closest_ems_row.iloc[0]["closest_ems_station"]
-                            train_lat = closest_ems_row.iloc[0]["train_lat"]
-                            train_long = closest_ems_row.iloc[0]["train_long"]
 
                             # Call private method to find closest weather with snow depth alternative
                             weather_data_point = self._find_closest_weather(
-                                closest_ems_station, 
-                                scheduled_time, 
-                                train_lat, 
-                                train_long
+                                closest_ems_station,
+                                scheduled_time,
+                                station_short_code
                             )
 
                             if not weather_data_point:
@@ -958,69 +1016,62 @@ class DataLoader:
         
         return filtered_train_data
 
-    def _find_alternative_weather_data(self, train_lat, train_long, scheduled_time, target_column, max_distance_km, exclude_station=None):
+    def _find_alternative_weather_data(self, station_short_code, scheduled_time, target_column, exclude_station=None):
         """
-        Finds weather data for a specific column from an alternative EMS station within the specified distance range.
+        Finds weather data for a specific column from an alternative EMS station using the precomputed top-5 lookup.
 
         Parameters:
-            train_lat (float): Latitude of the train station.
-            train_long (float): Longitude of the train station.
+            station_short_code (str): The train station short code to look up in the top-5 table.
             scheduled_time (str): The scheduled time in ISO format.
             target_column (str): The weather column name to search for (e.g., "Snow depth", "Air temperature").
-            max_distance_km (float): Maximum distance in kilometers to search for alternative stations.
             exclude_station (str): Station to exclude from search (the primary station).
 
         Returns:
-            dict: Dictionary containing alternative weather value and distance, or empty dict if none found.
-                  Format: {'{target_column} Other': value, '{target_column} Other Distance': distance}
+            dict: Dictionary containing the target feature's instant value and all its rolling window
+                  columns from the alternative station, using original column names. Empty dict if none found.
         """
-        if self.ems_metadata.empty:
+        if not self.top5_ems_dict:
+            return {}
+
+        top5_row = self.top5_ems_dict.get(station_short_code)
+        if top5_row is None:
             return {}
 
         try:
-            # Convert scheduled time to datetime
             scheduled_time_dt = datetime.strptime(scheduled_time, "%Y-%m-%dT%H:%M:%S.%fZ")
         except ValueError as e:
             print(f"🚨 Invalid scheduled time format for alternative search: {e}")
             return {}
 
-        train_coords = (train_lat, train_long)
-        alternative_stations = []
+        scheduled_time_np = np.datetime64(scheduled_time_dt)
 
-        # Find all EMS stations within the distance range
-        for _, ems_station in self.ems_metadata.iterrows():
-            station_name = ems_station["station_name"]
-            
-            # Skip the excluded station (primary closest station)
+        # Build the list of columns to extract: instant value + all rolling window columns for this feature
+        columns_to_extract = [target_column]
+        if target_column in FMI_ROLLING_WINDOW_PARAMS:
+            skip_min_max = target_column in FMI_ROLLING_SKIP_MIN_MAX
+            for window_hours in FMI_ROLLING_WINDOW_HOURS:
+                rolling_names = get_fmi_rolling_column_names(target_column, window_hours, skip_min_max)
+                columns_to_extract.extend(rolling_names.values())
+
+        # Iterate through precomputed top-5 closest EMS stations (already sorted by distance)
+        for rank in range(1, 6):
+            station_name = top5_row.get(f"ems_{rank}_station")
+
+            if pd.isna(station_name):
+                continue
+
+            # Skip the primary station
             if exclude_station and station_name == exclude_station:
                 continue
 
-            # Skip if station has no weather data
+            # Skip if station has no weather data loaded
             if station_name not in self.ems_weather_dict:
                 continue
 
-            ems_coords = (ems_station["latitude"], ems_station["longitude"])
-            distance = haversine(train_coords, ems_coords, unit=Unit.KILOMETERS)
-
-            if distance <= max_distance_km:
-                alternative_stations.append({
-                    'station_name': station_name,
-                    'latitude': ems_station["latitude"],
-                    'longitude': ems_station["longitude"],
-                    'distance': distance
-                })
-
-        # Sort by distance (closest first)
-        alternative_stations.sort(key=lambda x: x['distance'])
-
-        # Search for weather data in alternative stations
-        for station_info in alternative_stations:
-            station_name = station_info['station_name']
             station_weather_df = self.ems_weather_dict[station_name]
 
             # Convert timestamps to numpy array for fast lookup
             timestamps = station_weather_df["timestamp"].to_numpy(dtype="datetime64[ns]")
-            scheduled_time_np = np.datetime64(scheduled_time_dt)
 
             # Use np.searchsorted for fast timestamp lookup
             idx = np.searchsorted(timestamps, scheduled_time_np)
@@ -1036,27 +1087,29 @@ class DataLoader:
                 closest_idx = idx if after < before else idx - 1
 
             closest_row = station_weather_df.iloc[closest_idx]
-            
-            # Check if this station has the target weather data
+
+            # Check if this station has the target instant value
             weather_value = closest_row.get(target_column)
             if pd.notna(weather_value) and weather_value is not None:
-                return {
-                    f'{target_column} Other': float(weather_value),
-                    f'{target_column} Other Distance': round(station_info['distance'], 2)
-                }
+                # Extract the instant value and all rolling window columns for this feature
+                result = {}
+                for col in columns_to_extract:
+                    val = closest_row.get(col)
+                    if val is not None and pd.notna(val):
+                        result[col] = float(val)
+                return result
 
         # No alternative weather data found
         return {}
 
-    def _find_closest_weather(self, ems_station, scheduled_time, train_lat, train_long):
+    def _find_closest_weather(self, ems_station, scheduled_time, station_short_code):
         """
         Finds the closest weather observation and alternative weather data for multiple features if needed.
 
         Parameters:
             ems_station (str): The closest EMS station name.
             scheduled_time (str): The scheduled time in ISO format.
-            train_lat (float): Latitude of the train station.
-            train_long (float): Longitude of the train station.
+            station_short_code (str): The train station short code for top-5 EMS lookup.
 
         Returns:
             dict: A dictionary containing the matched weather observations and alternative weather data for each feature if applicable.
@@ -1098,18 +1151,8 @@ class DataLoader:
         weather_dict = closest_row.drop(["station_name"]).to_dict()
         weather_dict = {"closest_ems": closest_row["station_name"], **weather_dict}
 
-        # Convert the timestamp to the same format as other timestamps (ISO format with Z)
-        if "timestamp" in weather_dict:
-            timestamp_value = weather_dict["timestamp"]
-            if pd.notna(timestamp_value):
-                # Convert Pandas Timestamp to ISO format string with milliseconds and Z
-                weather_dict["weather_timestamp"] = timestamp_value.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-            else:
-                weather_dict["weather_timestamp"] = None
-            # Remove the original timestamp key
-            del weather_dict["timestamp"]
-    
-        weather_dict = {"closest_ems": closest_row["station_name"], **weather_dict}
+        # Remove the timestamp key (not needed in output)
+        weather_dict.pop("timestamp", None)
 
 
         # Ensure ALTERNATIVE_WEATHER_COLUMN is a list
@@ -1118,28 +1161,18 @@ class DataLoader:
         # Check each weather feature for missing data and search for alternatives
         for feature_name in weather_features:
             target_weather_value = weather_dict.get(feature_name)
-            
+
             if pd.isna(target_weather_value) or target_weather_value is None:
-                # Search for alternative weather data for this specific feature
+                # Search for alternative weather data (instant + rolling) for this feature
                 alternative_weather_data = self._find_alternative_weather_data(
-                    train_lat, 
-                    train_long, 
-                    scheduled_time, 
-                    target_column=feature_name, 
-                    max_distance_km=ALTERNATIVE_WEATHER_RADIUS_KM, 
+                    station_short_code,
+                    scheduled_time,
+                    target_column=feature_name,
                     exclude_station=ems_station
                 )
-                
+
                 if alternative_weather_data:
                     weather_dict.update(alternative_weather_data)
-                else:
-                    # No alternative found, set to None
-                    weather_dict[f'{feature_name} Other'] = None
-                    weather_dict[f'{feature_name} Other Distance'] = None
-            else:
-                # Primary weather data exists for this feature, set alternative columns to None
-                weather_dict[f'{feature_name} Other'] = None
-                weather_dict[f'{feature_name} Other Distance'] = None
 
         return weather_dict
     
