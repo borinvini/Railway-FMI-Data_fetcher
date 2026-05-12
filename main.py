@@ -3,7 +3,7 @@ from src.processors.DataLoader import DataLoader
 from src.fetchers.Railway import RailwayDataFetcher
 from src.fetchers.FMI import FMIDataFetcher
 
-from config.const import CSV_ALL_TRAINS, CSV_FMI, CSV_FMI_EMS, CSV_TRAIN_CATEGORIES, CSV_TRAIN_CAUSES, CSV_TRAIN_CAUSES_DETAILED, CSV_TRAIN_STATIONS, CSV_TRAIN_THIRD_CAUSES, END_DATE, FMI_BBOX, FOLDER_NAME, START_DATE
+from config.const import CSV_ALL_TRAINS, CSV_FMI, CSV_FMI_EMS, CSV_TRAIN_CATEGORIES, CSV_TRAIN_CAUSES, CSV_TRAIN_CAUSES_DETAILED, CSV_TRAIN_STATIONS, CSV_TRAIN_THIRD_CAUSES, END_DATE, FMI_BBOX, FLAT_FORMAT, FOLDER_NAME, START_DATE
 
 # Create data folder if it doesn't exist
 os.makedirs(FOLDER_NAME, exist_ok=True)
@@ -58,6 +58,15 @@ else:
         print("STEP 1: Preprocessing FMI Rolling Window Features")
         print("="*60)
         data_loader.preprocess_fmi_rolling_features()
+
+        # ============================================================
+        # STEP 1.5: Convert train data to flat format (one row per stop)
+        # ============================================================
+        if FLAT_FORMAT:
+            print("\n" + "="*60)
+            print("STEP 1.5: Converting Train Data to Flat Format")
+            print("="*60)
+            data_loader.convert_trains_to_flat()
 
         # ============================================================
         # STEP 2: Match train stations with closest EMS weather stations
