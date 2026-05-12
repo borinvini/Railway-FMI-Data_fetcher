@@ -1,3 +1,4 @@
+import ast
 from datetime import datetime
 import json
 import os
@@ -7,7 +8,7 @@ import pandas as pd
 from glob import glob
 from haversine import haversine, Unit
 from collections import Counter
-from config.const import ALTERNATIVE_WEATHER_COLUMN, CSV_ALL_TRAINS, CSV_CLOSEST_EMS_TRAIN, CSV_TOP5_CLOSEST_EMS_TRAIN, CSV_DELAY_TABLE_EACH_STATION, CSV_DELAY_TABLE_OFFSET, CSV_DELAY_TABLE_ORIGINAL, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_TRAIN_STATIONS, DELAY_LONG_DISTANCE_TRAINS, FILTER_BY_ROUTE, FILTER_BY_TRAIN_CATEGORY, FMI_ROLLING_WINDOW_HOURS, FMI_ROLLING_WINDOW_PARAMS, FMI_ROLLING_SKIP_MIN_MAX, FOLDER_NAME, MANDATORY_STATIONS, TRAIN_CATEGORY_FILTER, get_fmi_rolling_column_names
+from config.const import ALTERNATIVE_WEATHER_COLUMN, CSV_ALL_TRAINS, CSV_ALL_TRAINS_FLAT, CSV_CLOSEST_EMS_TRAIN, CSV_MATCHED_DATA_FLAT, CSV_TOP5_CLOSEST_EMS_TRAIN, CSV_DELAY_TABLE_EACH_STATION, CSV_DELAY_TABLE_OFFSET, CSV_DELAY_TABLE_ORIGINAL, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_TRAIN_STATIONS, DELAY_LONG_DISTANCE_TRAINS, FILTER_BY_ROUTE, FILTER_BY_TRAIN_CATEGORY, FLAT_FORMAT, FMI_ROLLING_WINDOW_HOURS, FMI_ROLLING_WINDOW_PARAMS, FMI_ROLLING_SKIP_MIN_MAX, FOLDER_NAME, MANDATORY_STATIONS, TRAIN_CATEGORY_FILTER, get_fmi_rolling_column_names
 from config.const import send_email
 
 class DataLoader:
@@ -391,6 +392,84 @@ class DataLoader:
         print(f"   Processed {len(FMI_ROLLING_WINDOW_PARAMS)} parameters x {len(FMI_ROLLING_WINDOW_HOURS)} windows across {len(sorted_weather_files)} files")
         print(f"{'='*60}\n")
 
+    def convert_trains_to_flat(self):
+        """
+        Convert all_trains_data CSV files to flat format (one row per train stop).
+
+        Reads each all_trains_data_YYYY_MM.csv, explodes timeTableRows into individual
+        rows, and saves all_trains_data_flat_YYYY_MM.csv alongside the original.
+        Skips months where the flat file already exists.
+        """
+        if not self.train_files:
+            raise ValueError("No train files loaded.")
+
+        print(f"\n{'='*60}")
+        print("STEP 1.5: Converting train data to flat format")
+        print(f"{'='*60}")
+
+        train_level_cols = [
+            'trainNumber', 'departureDate', 'operatorUICCode', 'operatorShortCode',
+            'trainType', 'trainCategory', 'commuterLineID', 'runningCurrently',
+            'cancelled', 'version', 'timetableType', 'timetableAcceptanceDate',
+        ]
+
+        for train_file in sorted(self.train_files):
+            dates = self._extract_dates_from_filenames([train_file])
+            if not dates:
+                print(f"⚠️ Could not extract date from {train_file}. Skipping.")
+                continue
+
+            month_period = pd.Period(dates[0], freq='M')
+            base = CSV_ALL_TRAINS_FLAT.replace('.csv', '')
+            flat_filename = f"{base}_{month_period.year}_{month_period.month:02d}.csv"
+            flat_filepath = os.path.join(self.output_folder, flat_filename)
+
+            if os.path.exists(flat_filepath):
+                print(f"  ℹ️ {flat_filename} already exists. Skipping.")
+                continue
+
+            print(f"📊 Converting {os.path.basename(train_file)}...")
+            train_data = pd.read_csv(train_file)
+            rows = []
+
+            for _, train_row in train_data.iterrows():
+                timetable_raw = train_row['timeTableRows']
+                try:
+                    timetable = ast.literal_eval(timetable_raw) if isinstance(timetable_raw, str) else timetable_raw
+                except (ValueError, SyntaxError) as e:
+                    print(f"⚠️ Failed to parse timeTableRows for train {train_row.get('trainNumber')}: {e}")
+                    continue
+
+                if not isinstance(timetable, list):
+                    continue
+
+                train_base = {col: train_row.get(col) for col in train_level_cols if col in train_row.index}
+
+                for stop in timetable:
+                    row = dict(train_base)
+                    row['stationName'] = stop.get('stationName')
+                    row['stationShortCode'] = stop.get('stationShortCode')
+                    row['stationUICCode'] = stop.get('stationUICCode')
+                    row['countryCode'] = stop.get('countryCode')
+                    row['type'] = stop.get('type')
+                    row['trainStopping'] = stop.get('trainStopping')
+                    row['commercialStop'] = stop.get('commercialStop')
+                    row['commercialTrack'] = stop.get('commercialTrack')
+                    row['stop_cancelled'] = stop.get('cancelled')
+                    row['scheduledTime'] = stop.get('scheduledTime')
+                    row['actualTime'] = stop.get('actualTime')
+                    row['differenceInMinutes'] = stop.get('differenceInMinutes')
+                    row['causes'] = str(stop.get('causes', []))
+                    train_ready = stop.get('trainReady')
+                    row['trainReady'] = str(train_ready) if train_ready is not None else None
+                    rows.append(row)
+
+            flat_df = pd.DataFrame(rows)
+            flat_df.to_csv(flat_filepath, index=False)
+            print(f"  ✅ Saved {len(rows)} rows to {flat_filename}")
+
+        print(f"\n✅ Flat train conversion complete.")
+        print(f"{'='*60}\n")
 
     def _find_closest_ems(self, train_lat, train_long, ems_stations):
         """
