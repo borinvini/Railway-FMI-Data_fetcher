@@ -83,6 +83,12 @@ else:
         print("="*60)
         data_loader.load_csv_files_by_month()
 
+        # ============================================================
+        # STEP 3.5: Convert matched data to flat format
+        # ============================================================
+        if FLAT_FORMAT:
+            data_loader.convert_matched_to_flat()
+
         print("\n" + "="*60)
         print("✅ ALL PROCESSING COMPLETE!")
         print("="*60)
