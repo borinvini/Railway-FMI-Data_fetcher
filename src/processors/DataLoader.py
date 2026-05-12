@@ -525,9 +525,17 @@ class DataLoader:
                 timetable_raw = train_row['timeTableRows']
                 try:
                     timetable = ast.literal_eval(timetable_raw) if isinstance(timetable_raw, str) else timetable_raw
-                except (ValueError, SyntaxError) as e:
-                    print(f"⚠️ Failed to parse timeTableRows for train {train_row.get('trainNumber')}: {e}")
-                    continue
+                except (ValueError, SyntaxError):
+                    try:
+                        timetable_fixed = timetable_raw.replace("'", '"') \
+                                                        .replace("True", "true") \
+                                                        .replace("False", "false") \
+                                                        .replace("None", "null") \
+                                                        .replace(": nan", ": null")
+                        timetable = json.loads(timetable_fixed)
+                    except (json.JSONDecodeError, Exception) as e:
+                        print(f"⚠️ Failed to parse timeTableRows for train {train_row.get('trainNumber')}: {e}")
+                        continue
 
                 if not isinstance(timetable, list):
                     continue
