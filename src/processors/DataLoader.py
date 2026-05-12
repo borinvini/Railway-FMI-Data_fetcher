@@ -471,6 +471,69 @@ class DataLoader:
         print(f"\n✅ Flat train conversion complete.")
         print(f"{'='*60}\n")
 
+    def _save_matched_flat(self, filtered_train_data, month_str):
+        """
+        Save matched train-weather data in flat format (one row per train stop).
+
+        Flattens timeTableRows and weather_observations to individual columns.
+        Saves as matched_data_flat_YYYY_MM.csv alongside the existing matched_data file.
+        """
+        month_period = pd.Period(month_str, freq='M')
+        base = CSV_MATCHED_DATA_FLAT.replace('.csv', '')
+        flat_filename = f"{base}_{month_period.year}_{month_period.month:02d}.csv"
+        flat_filepath = os.path.join(self.output_folder, flat_filename)
+
+        train_level_cols = [
+            'trainNumber', 'departureDate', 'operatorUICCode', 'operatorShortCode',
+            'trainType', 'trainCategory', 'commuterLineID', 'runningCurrently',
+            'cancelled', 'version', 'timetableType', 'timetableAcceptanceDate',
+        ]
+
+        rows = []
+        for _, train_row in filtered_train_data.iterrows():
+            timetable = train_row['timeTableRows']
+            if isinstance(timetable, str):
+                try:
+                    timetable = ast.literal_eval(timetable)
+                except (ValueError, SyntaxError) as e:
+                    print(f"⚠️ Failed to parse timeTableRows for train {train_row.get('trainNumber')}: {e}")
+                    continue
+
+            if not isinstance(timetable, list):
+                continue
+
+            train_base = {col: train_row.get(col) for col in train_level_cols if col in train_row.index}
+
+            for stop in timetable:
+                row = dict(train_base)
+                row['stationName'] = stop.get('stationName')
+                row['stationShortCode'] = stop.get('stationShortCode')
+                row['stationUICCode'] = stop.get('stationUICCode')
+                row['countryCode'] = stop.get('countryCode')
+                row['type'] = stop.get('type')
+                row['trainStopping'] = stop.get('trainStopping')
+                row['commercialStop'] = stop.get('commercialStop')
+                row['commercialTrack'] = stop.get('commercialTrack')
+                row['stop_cancelled'] = stop.get('cancelled')
+                row['scheduledTime'] = stop.get('scheduledTime')
+                row['actualTime'] = stop.get('actualTime')
+                row['differenceInMinutes'] = stop.get('differenceInMinutes')
+                row['differenceInMinutes_offset'] = stop.get('differenceInMinutes_offset')
+                row['differenceInMinutes_eachStation_offset'] = stop.get('differenceInMinutes_eachStation_offset')
+                row['causes'] = str(stop.get('causes', []))
+                train_ready = stop.get('trainReady')
+                row['trainReady'] = str(train_ready) if train_ready is not None else None
+
+                weather = stop.get('weather_observations', {})
+                if isinstance(weather, dict):
+                    row.update(weather)
+
+                rows.append(row)
+
+        flat_df = pd.DataFrame(rows)
+        flat_df.to_csv(flat_filepath, index=False)
+        print(f"  ✅ Saved flat matched data: {len(rows)} rows to {flat_filename}")
+
     def _find_closest_ems(self, train_lat, train_long, ems_stations):
         """
         Finds the closest EMS station based on Haversine distance.
@@ -1049,7 +1112,9 @@ class DataLoader:
 
         # Save the merged data for the specific month
         self.save_monthly_data_to_csv(filtered_train_data, month_str)
-        
+        if FLAT_FORMAT:
+            self._save_matched_flat(filtered_train_data, month_str)
+
         # Update print statement based on filtering settings
         filter_description = ""
         if FILTER_BY_TRAIN_CATEGORY:
