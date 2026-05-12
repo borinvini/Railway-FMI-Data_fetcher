@@ -12,6 +12,12 @@ from config.const import ALTERNATIVE_WEATHER_COLUMN, CSV_ALL_TRAINS, CSV_ALL_TRA
 from config.const import send_email
 
 class DataLoader:
+    _TRAIN_LEVEL_COLS = [
+        'trainNumber', 'departureDate', 'operatorUICCode', 'operatorShortCode',
+        'trainType', 'trainCategory', 'commuterLineID', 'runningCurrently',
+        'cancelled', 'version', 'timetableType', 'timetableAcceptanceDate',
+    ]
+
     def __init__(self):
         self.data_folder = FOLDER_NAME
         self.output_folder = FOLDER_NAME
@@ -407,11 +413,7 @@ class DataLoader:
         print("STEP 1.5: Converting train data to flat format")
         print(f"{'='*60}")
 
-        train_level_cols = [
-            'trainNumber', 'departureDate', 'operatorUICCode', 'operatorShortCode',
-            'trainType', 'trainCategory', 'commuterLineID', 'runningCurrently',
-            'cancelled', 'version', 'timetableType', 'timetableAcceptanceDate',
-        ]
+        train_level_cols = self._TRAIN_LEVEL_COLS
 
         for train_file in sorted(self.train_files):
             dates = self._extract_dates_from_filenames([train_file])
@@ -464,6 +466,10 @@ class DataLoader:
                     row['trainReady'] = str(train_ready) if train_ready is not None else None
                     rows.append(row)
 
+            if not rows:
+                print(f"  ⚠️ No rows to save for {flat_filename}. Skipping.")
+                continue
+
             flat_df = pd.DataFrame(rows)
             flat_df.to_csv(flat_filepath, index=False)
             print(f"  ✅ Saved {len(rows)} rows to {flat_filename}")
@@ -485,11 +491,7 @@ class DataLoader:
         flat_filename = f"{base}_{month_period.year}_{month_period.month:02d}.csv"
         flat_filepath = os.path.join(self.output_folder, flat_filename)
 
-        train_level_cols = [
-            'trainNumber', 'departureDate', 'operatorUICCode', 'operatorShortCode',
-            'trainType', 'trainCategory', 'commuterLineID', 'runningCurrently',
-            'cancelled', 'version', 'timetableType', 'timetableAcceptanceDate',
-        ]
+        train_level_cols = self._TRAIN_LEVEL_COLS
 
         rows = []
         for _, train_row in filtered_train_data.iterrows():

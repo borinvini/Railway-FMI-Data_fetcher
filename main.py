@@ -63,9 +63,6 @@ else:
         # STEP 1.5: Convert train data to flat format (one row per stop)
         # ============================================================
         if FLAT_FORMAT:
-            print("\n" + "="*60)
-            print("STEP 1.5: Converting Train Data to Flat Format")
-            print("="*60)
             data_loader.convert_trains_to_flat()
 
         # ============================================================
