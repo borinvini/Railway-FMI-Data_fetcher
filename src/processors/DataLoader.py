@@ -216,11 +216,15 @@ class DataLoader:
             first_check_col = first_col_names['mean']
             if first_check_col in weather_data.columns:
                 print(f"  ℹ️ Rolling features already exist. Skipping...")
-                # Still need to store this month's last hours for next month
-                weather_data_sorted = weather_data.sort_values(by=["timestamp"]).reset_index(drop=True)
-                max_timestamp = weather_data_sorted["timestamp"].max()
+                # Keep last max_window hours for the next month's rolling window continuity.
+                # max() and boolean filter don't require a sorted copy — avoid sort_values+reset_index
+                # which would triple peak memory (~2.5 GB file → ~7.5 GB). Free the full array
+                # as soon as the small subset is extracted.
+                weather_data["timestamp"] = pd.to_datetime(weather_data["timestamp"], errors="coerce")
+                max_timestamp = weather_data["timestamp"].max()
                 cutoff_time = max_timestamp - pd.Timedelta(hours=max_window)
-                previous_month_data = weather_data_sorted[weather_data_sorted["timestamp"] > cutoff_time].copy()
+                previous_month_data = weather_data[weather_data["timestamp"] > cutoff_time].copy()
+                del weather_data
                 previous_month_str = current_month_str
                 continue
             
