@@ -141,3 +141,94 @@ class TestConvertTrainsToFlat:
         loader.convert_trains_to_flat()
 
         assert os.path.getmtime(flat_path) == mtime_before  # file not touched
+
+
+STOP_WITH_WEATHER = {
+    'stationName': 'Helsinki asema',
+    'stationShortCode': 'HKI',
+    'stationUICCode': 1,
+    'countryCode': 'FI',
+    'type': 'DEPARTURE',
+    'trainStopping': True,
+    'commercialStop': True,
+    'commercialTrack': '9',
+    'cancelled': False,
+    'scheduledTime': '2024-01-01T04:57:00.000Z',
+    'actualTime': '2024-01-01T04:57:21.000Z',
+    'differenceInMinutes': 0,
+    'differenceInMinutes_offset': 0,
+    'differenceInMinutes_eachStation_offset': 0,
+    'causes': [],
+    'trainReady': {'source': 'KUPLA', 'accepted': True, 'timestamp': '2024-01-01T04:51:10.000Z'},
+    'weather_observations': {
+        'closest_ems': 'Helsinki Kaisaniemi',
+        'Air temperature': -14.8,
+        'Wind speed': 3.8,
+        'Snow depth': 21.0,
+    },
+}
+
+STOP_WITHOUT_WEATHER = {
+    'stationName': 'Tampere asema',
+    'stationShortCode': 'TPE',
+    'stationUICCode': 160,
+    'countryCode': 'FI',
+    'type': 'ARRIVAL',
+    'trainStopping': True,
+    'commercialStop': True,
+    'commercialTrack': '2',
+    'cancelled': True,
+    'scheduledTime': '2024-01-01T06:57:00.000Z',
+    'actualTime': None,
+    'differenceInMinutes': 5,
+    'differenceInMinutes_offset': 5,
+    'differenceInMinutes_eachStation_offset': 5,
+    'causes': [{'categoryCode': 'X1'}],
+    'trainReady': None,
+    'weather_observations': {},
+}
+
+MATCHED_TRAIN_ROW = {
+    **{k: v for k, v in TRAIN_ROW.items() if k != 'timeTableRows'},
+    'timeTableRows': str([STOP_WITH_WEATHER, STOP_WITHOUT_WEATHER]),
+}
+
+
+class TestSaveMatchedFlat:
+
+    def test_output_row_count_equals_total_stops(self, loader, tmp_path):
+        matched_df = pd.DataFrame([MATCHED_TRAIN_ROW])
+        loader._save_matched_flat(matched_df, '2024-01')
+
+        flat_path = os.path.join(str(tmp_path), 'matched_data_flat_2024_01.csv')
+        assert os.path.exists(flat_path)
+        flat_df = pd.read_csv(flat_path)
+        assert len(flat_df) == 2
+
+    def test_weather_observations_flattened_to_top_level_columns(self, loader, tmp_path):
+        matched_df = pd.DataFrame([MATCHED_TRAIN_ROW])
+        loader._save_matched_flat(matched_df, '2024-01')
+
+        flat_df = pd.read_csv(os.path.join(str(tmp_path), 'matched_data_flat_2024_01.csv'))
+        assert 'closest_ems' in flat_df.columns
+        assert 'Air temperature' in flat_df.columns
+        assert 'Snow depth' in flat_df.columns
+        assert flat_df['Air temperature'].iloc[0] == -14.8
+        assert flat_df['Snow depth'].iloc[0] == 21.0
+
+    def test_delay_offset_columns_present(self, loader, tmp_path):
+        matched_df = pd.DataFrame([MATCHED_TRAIN_ROW])
+        loader._save_matched_flat(matched_df, '2024-01')
+
+        flat_df = pd.read_csv(os.path.join(str(tmp_path), 'matched_data_flat_2024_01.csv'))
+        assert 'differenceInMinutes_offset' in flat_df.columns
+        assert 'differenceInMinutes_eachStation_offset' in flat_df.columns
+
+    def test_stop_with_no_weather_has_nan_weather_columns(self, loader, tmp_path):
+        matched_df = pd.DataFrame([MATCHED_TRAIN_ROW])
+        loader._save_matched_flat(matched_df, '2024-01')
+
+        flat_df = pd.read_csv(os.path.join(str(tmp_path), 'matched_data_flat_2024_01.csv'))
+        # STOP_WITHOUT_WEATHER has empty weather_observations — those columns are NaN for row 2
+        assert pd.isna(flat_df['Air temperature'].iloc[1])
+        assert pd.isna(flat_df['Snow depth'].iloc[1])
