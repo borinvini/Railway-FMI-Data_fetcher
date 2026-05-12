@@ -94,9 +94,8 @@ CSV_CLOSEST_EMS_TRAIN = "metadata_closest_ems_to_train_stations.csv"
 CSV_TOP5_CLOSEST_EMS_TRAIN = "metadata_top5_closest_ems.csv"
 CSV_MATCHED_DATA = "matched_data.csv"
 CSV_ALL_TRAINS_FLAT = "all_trains_data_flat.csv"
-CSV_MATCHED_DATA_FLAT = "matched_data_flat.csv"
 
-FLAT_FORMAT = False  # Set True to produce flat (one-row-per-stop) CSVs alongside originals
+FLAT_FORMAT = True  # Set True to produce all_trains_data_flat_*.csv (one-row-per-stop)
 
 CSV_DELAY_TABLE_ORIGINAL = "delay_table_differenceInMinutes.csv"
 CSV_DELAY_TABLE_OFFSET = "delay_table_differenceInMinutes_offset.csv" 
