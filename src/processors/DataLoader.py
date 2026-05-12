@@ -518,53 +518,59 @@ class DataLoader:
                 continue
 
             print(f"📊 Converting {os.path.basename(matched_file)}...")
-            matched_data = pd.read_csv(matched_file)
-            rows = []
+            total_rows_written = 0
+            first_chunk = True
 
-            for _, train_row in matched_data.iterrows():
-                timetable_raw = train_row['timeTableRows']
-                try:
-                    timetable = ast.literal_eval(timetable_raw) if isinstance(timetable_raw, str) else timetable_raw
-                except (ValueError, SyntaxError):
+            for chunk in pd.read_csv(matched_file, chunksize=500):
+                rows = []
+
+                for _, train_row in chunk.iterrows():
+                    timetable_raw = train_row['timeTableRows']
                     try:
-                        timetable_fixed = timetable_raw.replace("'", '"') \
-                                                        .replace("True", "true") \
-                                                        .replace("False", "false") \
-                                                        .replace("None", "null") \
-                                                        .replace(": nan", ": null")
-                        timetable = json.loads(timetable_fixed)
-                    except (json.JSONDecodeError, Exception) as e:
-                        print(f"⚠️ Failed to parse timeTableRows for train {train_row.get('trainNumber')}: {e}")
+                        timetable = ast.literal_eval(timetable_raw) if isinstance(timetable_raw, str) else timetable_raw
+                    except (ValueError, SyntaxError):
+                        try:
+                            timetable_fixed = timetable_raw.replace("'", '"') \
+                                                            .replace("True", "true") \
+                                                            .replace("False", "false") \
+                                                            .replace("None", "null") \
+                                                            .replace(": nan", ": null")
+                            timetable = json.loads(timetable_fixed)
+                        except (json.JSONDecodeError, Exception) as e:
+                            print(f"⚠️ Failed to parse timeTableRows for train {train_row.get('trainNumber')}: {e}")
+                            continue
+
+                    if not isinstance(timetable, list):
                         continue
 
-                if not isinstance(timetable, list):
-                    continue
+                    train_base = {col: train_row.get(col) for col in train_level_cols if col in train_row.index}
 
-                train_base = {col: train_row.get(col) for col in train_level_cols if col in train_row.index}
+                    for stop in timetable:
+                        row = dict(train_base)
+                        for key, value in stop.items():
+                            if key == 'cancelled':
+                                row['stop_cancelled'] = value
+                            elif key == 'causes':
+                                row['causes'] = str(value)
+                            elif key == 'trainReady':
+                                row['trainReady'] = str(value) if value is not None else None
+                            elif key == 'weather_observations':
+                                if isinstance(value, dict):
+                                    row.update(value)
+                            else:
+                                row[key] = value
+                        rows.append(row)
 
-                for stop in timetable:
-                    row = dict(train_base)
-                    for key, value in stop.items():
-                        if key == 'cancelled':
-                            row['stop_cancelled'] = value
-                        elif key == 'causes':
-                            row['causes'] = str(value)
-                        elif key == 'trainReady':
-                            row['trainReady'] = str(value) if value is not None else None
-                        elif key == 'weather_observations':
-                            if isinstance(value, dict):
-                                row.update(value)
-                        else:
-                            row[key] = value
-                    rows.append(row)
+                if rows:
+                    pd.DataFrame(rows).to_csv(flat_filepath, mode='a', header=first_chunk, index=False)
+                    total_rows_written += len(rows)
+                    first_chunk = False
 
-            if not rows:
+            if total_rows_written == 0:
                 print(f"  ⚠️ No rows to save for {flat_filename}. Skipping.")
                 continue
 
-            flat_df = pd.DataFrame(rows)
-            flat_df.to_csv(flat_filepath, index=False)
-            print(f"  ✅ Saved {len(rows)} rows to {flat_filename}")
+            print(f"  ✅ Saved {total_rows_written} rows to {flat_filename}")
 
         print(f"\n✅ Flat matched data conversion complete.")
         print(f"{'='*60}\n")
