@@ -539,6 +539,10 @@ class DataLoader:
                     for key, value in stop.items():
                         if key == 'cancelled':
                             row['stop_cancelled'] = value
+                        elif key == 'causes':
+                            row['causes'] = str(value)
+                        elif key == 'trainReady':
+                            row['trainReady'] = str(value) if value is not None else None
                         elif key == 'weather_observations':
                             if isinstance(value, dict):
                                 row.update(value)
