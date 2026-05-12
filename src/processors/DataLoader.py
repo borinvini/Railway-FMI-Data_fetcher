@@ -37,7 +37,7 @@ class DataLoader:
             print(f"✅ Created data folder: {self.data_folder}")
         
         # Find files matching the patterns
-        self.train_files = glob(os.path.join(self.data_folder, f"{CSV_ALL_TRAINS[:-4]}*.csv"))
+        self.train_files = glob(os.path.join(self.data_folder, f"{CSV_ALL_TRAINS[:-4]}_[0-9]*.csv"))
         self.weather_files = glob(os.path.join(self.data_folder, f"{CSV_FMI[:-4]}*.csv"))
 
         if not self.train_files:
