@@ -493,7 +493,20 @@ class DataLoader:
 
         train_level_cols = self._TRAIN_LEVEL_COLS
 
+        # Write in chunks to avoid building millions of dicts in memory at once.
+        CHUNK_SIZE = 5000  # rows per flush
         rows = []
+        total_rows = 0
+        first_write = True
+
+        def _flush(rows, first_write):
+            chunk_df = pd.DataFrame(rows)
+            if first_write:
+                chunk_df.to_csv(flat_filepath, index=False, mode='w')
+            else:
+                chunk_df.to_csv(flat_filepath, index=False, mode='a', header=False)
+            return False  # first_write is now False
+
         for _, train_row in filtered_train_data.iterrows():
             timetable = train_row['timeTableRows']
             if isinstance(timetable, str):
@@ -534,13 +547,20 @@ class DataLoader:
 
                 rows.append(row)
 
-        if not rows:
+            if len(rows) >= CHUNK_SIZE:
+                first_write = _flush(rows, first_write)
+                total_rows += len(rows)
+                rows = []
+
+        if not rows and total_rows == 0:
             print(f"  ⚠️ No rows to save for {flat_filename}. Skipping.")
             return
 
-        flat_df = pd.DataFrame(rows)
-        flat_df.to_csv(flat_filepath, index=False)
-        print(f"  ✅ Saved flat matched data: {len(rows)} rows to {flat_filename}")
+        if rows:
+            first_write = _flush(rows, first_write)
+            total_rows += len(rows)
+
+        print(f"  ✅ Saved flat matched data: {total_rows} rows to {flat_filename}")
 
     def _find_closest_ems(self, train_lat, train_long, ems_stations):
         """
