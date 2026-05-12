@@ -481,6 +481,82 @@ class DataLoader:
         print(f"\n✅ Flat train conversion complete.")
         print(f"{'='*60}\n")
 
+    def convert_matched_to_flat(self):
+        """
+        Convert matched_data CSV files to flat format (one row per train stop).
+
+        Reads each matched_data_YYYY_MM.csv, explodes timeTableRows into individual
+        rows, flattens the weather_observations dict into top-level columns, and
+        saves matched_data_flat_YYYY_MM.csv alongside the original.
+        Skips months where the flat file already exists.
+        """
+        matched_files = glob(os.path.join(self.output_folder, f"{CSV_MATCHED_DATA.replace('.csv', '')}_[0-9]*.csv"))
+
+        if not matched_files:
+            print("⚠️ No matched data files found. Skipping flat conversion.")
+            return
+
+        print(f"\n{'='*60}")
+        print("STEP 3.5: Converting matched data to flat format")
+        print(f"{'='*60}")
+
+        train_level_cols = self._TRAIN_LEVEL_COLS
+
+        for matched_file in sorted(matched_files):
+            dates = self._extract_dates_from_filenames([matched_file])
+            if not dates:
+                print(f"⚠️ Could not extract date from {matched_file}. Skipping.")
+                continue
+
+            month_period = pd.Period(dates[0], freq='M')
+            base = CSV_MATCHED_DATA_FLAT.replace('.csv', '')
+            flat_filename = f"{base}_{month_period.year}_{month_period.month:02d}.csv"
+            flat_filepath = os.path.join(self.output_folder, flat_filename)
+
+            if os.path.exists(flat_filepath):
+                print(f"  ℹ️ {flat_filename} already exists. Skipping.")
+                continue
+
+            print(f"📊 Converting {os.path.basename(matched_file)}...")
+            matched_data = pd.read_csv(matched_file)
+            rows = []
+
+            for _, train_row in matched_data.iterrows():
+                timetable_raw = train_row['timeTableRows']
+                try:
+                    timetable = ast.literal_eval(timetable_raw) if isinstance(timetable_raw, str) else timetable_raw
+                except (ValueError, SyntaxError) as e:
+                    print(f"⚠️ Failed to parse timeTableRows for train {train_row.get('trainNumber')}: {e}")
+                    continue
+
+                if not isinstance(timetable, list):
+                    continue
+
+                train_base = {col: train_row.get(col) for col in train_level_cols if col in train_row.index}
+
+                for stop in timetable:
+                    row = dict(train_base)
+                    for key, value in stop.items():
+                        if key == 'cancelled':
+                            row['stop_cancelled'] = value
+                        elif key == 'weather_observations':
+                            if isinstance(value, dict):
+                                row.update(value)
+                        else:
+                            row[key] = value
+                    rows.append(row)
+
+            if not rows:
+                print(f"  ⚠️ No rows to save for {flat_filename}. Skipping.")
+                continue
+
+            flat_df = pd.DataFrame(rows)
+            flat_df.to_csv(flat_filepath, index=False)
+            print(f"  ✅ Saved {len(rows)} rows to {flat_filename}")
+
+        print(f"\n✅ Flat matched data conversion complete.")
+        print(f"{'='*60}\n")
+
     def _find_closest_ems(self, train_lat, train_long, ems_stations):
         """
         Finds the closest EMS station based on Haversine distance.
