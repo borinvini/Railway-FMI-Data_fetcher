@@ -232,3 +232,12 @@ class TestSaveMatchedFlat:
         # STOP_WITHOUT_WEATHER has empty weather_observations — those columns are NaN for row 2
         assert pd.isna(flat_df['Air temperature'].iloc[1])
         assert pd.isna(flat_df['Snow depth'].iloc[1])
+
+    def test_train_level_columns_present_and_repeated(self, loader, tmp_path):
+        matched_df = pd.DataFrame([MATCHED_TRAIN_ROW])
+        loader._save_matched_flat(matched_df, '2024-01')
+
+        flat_df = pd.read_csv(os.path.join(str(tmp_path), 'matched_data_flat_2024_01.csv'))
+        assert list(flat_df['trainNumber']) == [1, 1]
+        assert list(flat_df['trainType']) == ['IC', 'IC']
+        assert list(flat_df['trainCategory']) == ['Long-distance', 'Long-distance']
