@@ -478,6 +478,8 @@ class DataLoader:
         Flattens timeTableRows and weather_observations to individual columns.
         Saves as matched_data_flat_YYYY_MM.csv alongside the existing matched_data file.
         """
+        # Always overwrites — consistent with save_monthly_data_to_csv() behaviour.
+        # Unlike convert_trains_to_flat(), re-running a month re-merges with fresh weather data.
         month_period = pd.Period(month_str, freq='M')
         base = CSV_MATCHED_DATA_FLAT.replace('.csv', '')
         flat_filename = f"{base}_{month_period.year}_{month_period.month:02d}.csv"
@@ -529,6 +531,10 @@ class DataLoader:
                     row.update(weather)
 
                 rows.append(row)
+
+        if not rows:
+            print(f"  ⚠️ No rows to save for {flat_filename}. Skipping.")
+            return
 
         flat_df = pd.DataFrame(rows)
         flat_df.to_csv(flat_filepath, index=False)
