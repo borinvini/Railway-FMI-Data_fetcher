@@ -566,6 +566,114 @@ class DataLoader:
 
         print(f"  ✅ Saved flat matched data: {total_rows} rows to {flat_filename}")
 
+    def convert_matched_to_flat(self):
+        """
+        Convert matched_data CSV files to flat format (one row per train stop).
+
+        Reads each matched_data_YYYY_MM.csv from disk in chunks of 100 trains,
+        flattens timeTableRows and weather_observations, and saves
+        matched_data_flat_YYYY_MM.csv. Skips months where the flat file already exists.
+        Unlike _save_matched_flat(), this method never loads the full month into RAM.
+        """
+        matched_files = glob(os.path.join(self.data_folder, f"{CSV_MATCHED_DATA[:-4]}_[0-9]*.csv"))
+
+        if not matched_files:
+            print(f"⚠️ No matched data files found. Skipping flat matched conversion.")
+            return
+
+        print(f"\n{'='*60}")
+        print("Converting matched data to flat format")
+        print(f"{'='*60}")
+
+        train_level_cols = self._TRAIN_LEVEL_COLS
+        CHUNK_SIZE = 5000
+
+        def _flush(rows, flat_filepath, first_write):
+            chunk_df = pd.DataFrame(rows)
+            if first_write:
+                chunk_df.to_csv(flat_filepath, index=False, mode='w')
+            else:
+                chunk_df.to_csv(flat_filepath, index=False, mode='a', header=False)
+            return False
+
+        for matched_file in sorted(matched_files):
+            dates = self._extract_dates_from_filenames([matched_file])
+            if not dates:
+                print(f"⚠️ Could not extract date from {matched_file}. Skipping.")
+                continue
+
+            month_period = pd.Period(dates[0], freq='M')
+            base = CSV_MATCHED_DATA_FLAT.replace('.csv', '')
+            flat_filename = f"{base}_{month_period.year}_{month_period.month:02d}.csv"
+            flat_filepath = os.path.join(self.output_folder, flat_filename)
+
+            if os.path.exists(flat_filepath):
+                print(f"  ℹ️ {flat_filename} already exists. Skipping.")
+                continue
+
+            print(f"📊 Converting {os.path.basename(matched_file)}...")
+            rows = []
+            total_rows = 0
+            first_write = True
+
+            for chunk in pd.read_csv(matched_file, chunksize=100):
+                for _, train_row in chunk.iterrows():
+                    timetable_raw = train_row['timeTableRows']
+                    try:
+                        timetable = ast.literal_eval(timetable_raw) if isinstance(timetable_raw, str) else timetable_raw
+                    except (ValueError, SyntaxError) as e:
+                        print(f"⚠️ Failed to parse train {train_row.get('trainNumber')}: {e}")
+                        continue
+
+                    if not isinstance(timetable, list):
+                        continue
+
+                    train_base = {col: train_row.get(col) for col in train_level_cols if col in train_row.index}
+
+                    for stop in timetable:
+                        row = dict(train_base)
+                        row['stationName'] = stop.get('stationName')
+                        row['stationShortCode'] = stop.get('stationShortCode')
+                        row['stationUICCode'] = stop.get('stationUICCode')
+                        row['countryCode'] = stop.get('countryCode')
+                        row['type'] = stop.get('type')
+                        row['trainStopping'] = stop.get('trainStopping')
+                        row['commercialStop'] = stop.get('commercialStop')
+                        row['commercialTrack'] = stop.get('commercialTrack')
+                        row['stop_cancelled'] = stop.get('cancelled')
+                        row['scheduledTime'] = stop.get('scheduledTime')
+                        row['actualTime'] = stop.get('actualTime')
+                        row['differenceInMinutes'] = stop.get('differenceInMinutes')
+                        row['differenceInMinutes_offset'] = stop.get('differenceInMinutes_offset')
+                        row['differenceInMinutes_eachStation_offset'] = stop.get('differenceInMinutes_eachStation_offset')
+                        row['causes'] = str(stop.get('causes', []))
+                        train_ready = stop.get('trainReady')
+                        row['trainReady'] = str(train_ready) if train_ready is not None else None
+
+                        weather = stop.get('weather_observations', {})
+                        if isinstance(weather, dict):
+                            row.update(weather)
+
+                        rows.append(row)
+
+                    if len(rows) >= CHUNK_SIZE:
+                        first_write = _flush(rows, flat_filepath, first_write)
+                        total_rows += len(rows)
+                        rows = []
+
+            if not rows and total_rows == 0:
+                print(f"  ⚠️ No rows to save for {flat_filename}. Skipping.")
+                continue
+
+            if rows:
+                first_write = _flush(rows, flat_filepath, first_write)
+                total_rows += len(rows)
+
+            print(f"  ✅ Saved {total_rows} rows to {flat_filename}")
+
+        print(f"\n✅ Flat matched data conversion complete.")
+        print(f"{'='*60}\n")
+
     def _find_closest_ems(self, train_lat, train_long, ems_stations):
         """
         Finds the closest EMS station based on Haversine distance.
@@ -1144,8 +1252,6 @@ class DataLoader:
 
         # Save the merged data for the specific month
         self.save_monthly_data_to_csv(filtered_train_data, month_str)
-        if FLAT_FORMAT:
-            self._save_matched_flat(filtered_train_data, month_str)
 
         # Update print statement based on filtering settings
         filter_description = ""

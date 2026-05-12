@@ -64,6 +64,7 @@ else:
         # ============================================================
         if FLAT_FORMAT:
             data_loader.convert_trains_to_flat()
+            data_loader.convert_matched_to_flat()
 
         # ============================================================
         # STEP 2: Match train stations with closest EMS weather stations
