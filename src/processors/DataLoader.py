@@ -8,7 +8,7 @@ import pandas as pd
 from glob import glob
 from haversine import haversine, Unit
 from collections import Counter
-from config.const import ALTERNATIVE_WEATHER_COLUMN, CSV_ALL_TRAINS, CSV_ALL_TRAINS_FLAT, CSV_CLOSEST_EMS_TRAIN, CSV_TOP5_CLOSEST_EMS_TRAIN, CSV_DELAY_TABLE_EACH_STATION, CSV_DELAY_TABLE_OFFSET, CSV_DELAY_TABLE_ORIGINAL, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_MATCHED_DATA_FLAT, CSV_TRAIN_STATIONS, DELAY_LONG_DISTANCE_TRAINS, FILTER_BY_ROUTE, FILTER_BY_TRAIN_CATEGORY, FMI_ROLLING_WINDOW_HOURS, FMI_ROLLING_WINDOW_PARAMS, FMI_ROLLING_SKIP_MIN_MAX, FOLDER_NAME, MANDATORY_STATIONS, TRAIN_CATEGORY_FILTER, get_fmi_rolling_column_names
+from config.const import ALTERNATIVE_WEATHER_COLUMN, CSV_ALL_TRAINS, CSV_ALL_TRAINS_FLAT, CSV_CLOSEST_EMS_TRAIN, CSV_TOP5_CLOSEST_EMS_TRAIN, CSV_DELAY_TABLE_EACH_STATION, CSV_DELAY_TABLE_OFFSET, CSV_DELAY_TABLE_ORIGINAL, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_MATCHED_DATA_FLAT, CSV_TRAIN_STATIONS, DELAY_LONG_DISTANCE_TRAINS, FILTER_BY_ROUTE, FILTER_BY_TRAIN_CATEGORY, FMI_ROLLING_WINDOW_HOURS, FMI_ROLLING_WINDOW_PARAMS, FMI_ROLLING_SKIP_MIN_MAX, FMI_ROLLING_INCLUDE_CUMULATIVE, FOLDER_NAME, MANDATORY_STATIONS, TRAIN_CATEGORY_FILTER, get_fmi_rolling_column_names
 from config.const import send_email
 
 class DataLoader:
@@ -17,6 +17,38 @@ class DataLoader:
         'trainType', 'trainCategory', 'commuterLineID', 'runningCurrently',
         'cancelled', 'version', 'timetableType', 'timetableAcceptanceDate',
     ]
+
+    # Column descriptions written to the companion *_schema.csv for every delay table.
+    _DELAY_TABLE_SCHEMA = {
+        "year":                      "Calendar year of the departure date.",
+        "month":                     "Calendar month of the departure date (1–12).",
+        "day_of_month":              "Day within the month (1–31).",
+        "day_of_week":               "Day of the week (1=Monday, 7=Sunday).",
+        "total_trains_on_route":     "Number of distinct trains that departed on this day.",
+        "total_schedules_by_day":    "Total individual station stops scheduled across all trains on this day.",
+        "avg_stops_per_train":       "Average stops per train (total_schedules_by_day / total_trains_on_route). Higher values indicate longer or more complex routes.",
+        "cancelled_trains_by_day":   "Trains that were fully cancelled at the train level and never ran.",
+        "cancelled_stops_by_day":    "Individual station stops cancelled within otherwise-running trains.",
+        "delay_count_by_day":        f"Station stops delayed by at least the configured threshold (DELAY_LONG_DISTANCE_TRAINS minutes).",
+        "delay_rate":                "Fraction of all scheduled stops that were delayed (delay_count_by_day / total_schedules_by_day). Main normalised punctuality metric.",
+        "delay_count_arrivals":      "Delayed stops where the stop type is ARRIVAL.",
+        "delay_count_departures":    "Delayed stops where the stop type is DEPARTURE.",
+        "max_delay_minutes":         "Maximum single delay recorded across all stops on this day (minutes).",
+        "avg_delay_minutes":         "Mean delay across all delayed stops on this day (minutes). Only counts stops meeting the threshold.",
+        "median_delay_minutes":      "Median delay across all delayed stops (minutes). More robust to extreme outlier delays than the mean.",
+        "delays_5_15min":            "Delayed stops with delay in [5, 15) minutes.",
+        "delays_15_30min":           "Delayed stops with delay in [15, 30) minutes.",
+        "delays_30_60min":           "Delayed stops with delay in [30, 60) minutes.",
+        "delays_over_60min":         "Delayed stops with delay >= 60 minutes.",
+        "first_stop_delay_count":    "Trains already delayed at their first stop (delay >= threshold at origin). Separates origin-departure issues from en-route accumulation.",
+        "delay_propagation_ratio":   "mean(differenceInMinutes_eachStation_offset) / mean(differenceInMinutes) over stops with a positive raw delay. >1: delays growing along the route; <1: crews recovering time; ~1: stable.",
+        "delay_count_by_train_type": "JSON dict mapping each train type (IC, S, P, …) to the number of its delayed stops on this day.",
+        "top_10_common_delays":      "The 10 most frequently occurring delay values (minutes) across all delayed stops, ordered by frequency.",
+        "rolling_delay_rate_7d":     "7-row rolling mean of delay_rate computed over the full sorted history in this file. Smooths day-to-day variability to reveal trends.",
+    }
+
+    # Canonical column order for all delay table CSVs.
+    _DELAY_TABLE_COLUMNS = list(_DELAY_TABLE_SCHEMA.keys())
 
     def __init__(self):
         self.data_folder = FOLDER_NAME
@@ -143,9 +175,10 @@ class DataLoader:
         - {parameter} ({window}h max): Highest value in the rolling window
         - {parameter} ({window}h min): Lowest value in the rolling window
         - {parameter} ({window}h mean): Mean value in the rolling window
-        - {parameter} ({window}h cumulative): Sum of values in the rolling window
+        - {parameter} ({window}h cumulative): Sum of values in the rolling window (Precipitation amount only)
 
         Parameters in FMI_ROLLING_SKIP_MIN_MAX only get mean and cumulative.
+        Parameters not in FMI_ROLLING_INCLUDE_CUMULATIVE skip the cumulative column.
 
         Returns:
             None. Updates the weather CSV files in place.
@@ -162,8 +195,9 @@ class DataLoader:
         print(f"\nParameters to process ({len(FMI_ROLLING_WINDOW_PARAMS)} total):")
         for param in FMI_ROLLING_WINDOW_PARAMS:
             skip = param in FMI_ROLLING_SKIP_MIN_MAX
+            skip_cum = param not in FMI_ROLLING_INCLUDE_CUMULATIVE
             for wh in FMI_ROLLING_WINDOW_HOURS:
-                col_names = get_fmi_rolling_column_names(param, wh, skip_min_max=skip)
+                col_names = get_fmi_rolling_column_names(param, wh, skip_min_max=skip, skip_cumulative=skip_cum)
                 for col_name in col_names.values():
                     print(f"      → {col_name}")
         print(f"{'='*60}\n")
@@ -212,7 +246,8 @@ class DataLoader:
             # Check if rolling columns already exist (to avoid reprocessing)
             first_param = available_params[0]
             first_skip = first_param in FMI_ROLLING_SKIP_MIN_MAX
-            first_col_names = get_fmi_rolling_column_names(first_param, FMI_ROLLING_WINDOW_HOURS[0], skip_min_max=first_skip)
+            first_skip_cum = first_param not in FMI_ROLLING_INCLUDE_CUMULATIVE
+            first_col_names = get_fmi_rolling_column_names(first_param, FMI_ROLLING_WINDOW_HOURS[0], skip_min_max=first_skip, skip_cumulative=first_skip_cum)
             first_check_col = first_col_names['mean']
             if first_check_col in weather_data.columns:
                 print(f"  ℹ️ Rolling features already exist. Skipping...")
@@ -247,8 +282,9 @@ class DataLoader:
                 cols_to_remove = ["_is_current_month"]
                 for param in FMI_ROLLING_WINDOW_PARAMS:
                     skip = param in FMI_ROLLING_SKIP_MIN_MAX
+                    skip_cum = param not in FMI_ROLLING_INCLUDE_CUMULATIVE
                     for wh in FMI_ROLLING_WINDOW_HOURS:
-                        col_names = get_fmi_rolling_column_names(param, wh, skip_min_max=skip)
+                        col_names = get_fmi_rolling_column_names(param, wh, skip_min_max=skip, skip_cumulative=skip_cum)
                         cols_to_remove.extend(col_names.values())
                 
                 for col in cols_to_remove:
@@ -273,8 +309,9 @@ class DataLoader:
                 """
                 Calculate rolling window statistics for all parameters for a single station.
 
-                For each (parameter, window_size) combination, calculates max, min, mean, cumulative.
+                For each (parameter, window_size) combination, calculates max, min, mean, and cumulative where applicable.
                 Parameters in FMI_ROLLING_SKIP_MIN_MAX only get mean and cumulative.
+                Parameters not in FMI_ROLLING_INCLUDE_CUMULATIVE skip cumulative.
                 """
                 station_name = group.name
                 is_current_month = group["_is_current_month"].values
@@ -285,8 +322,9 @@ class DataLoader:
                 new_columns = {}
                 for param in available_params:
                     skip = param in FMI_ROLLING_SKIP_MIN_MAX
+                    skip_cum = param not in FMI_ROLLING_INCLUDE_CUMULATIVE
                     for wh in FMI_ROLLING_WINDOW_HOURS:
-                        col_names = get_fmi_rolling_column_names(param, wh, skip_min_max=skip)
+                        col_names = get_fmi_rolling_column_names(param, wh, skip_min_max=skip, skip_cumulative=skip_cum)
                         window_str = f"{wh}h"
 
                         rolling = group[param].rolling(window=window_str, min_periods=1)
@@ -296,7 +334,8 @@ class DataLoader:
                             new_columns[col_names['min']] = rolling.min().round(2)
 
                         new_columns[col_names['mean']] = rolling.mean().round(2)
-                        new_columns[col_names['cumulative']] = rolling.sum().round(2)
+                        if not skip_cum:
+                            new_columns[col_names['cumulative']] = rolling.sum().round(2)
 
                 group = pd.concat([group, pd.DataFrame(new_columns, index=group.index)], axis=1)
 
@@ -332,8 +371,9 @@ class DataLoader:
             new_cols = []
             for param in available_params:
                 skip = param in FMI_ROLLING_SKIP_MIN_MAX
+                skip_cum = param not in FMI_ROLLING_INCLUDE_CUMULATIVE
                 for wh in FMI_ROLLING_WINDOW_HOURS:
-                    col_names = get_fmi_rolling_column_names(param, wh, skip_min_max=skip)
+                    col_names = get_fmi_rolling_column_names(param, wh, skip_min_max=skip, skip_cumulative=skip_cum)
                     new_cols.extend(col_names.values())
             
             # Reorder columns: original columns + new columns
@@ -372,8 +412,9 @@ class DataLoader:
 
             for param in available_params:
                 skip = param in FMI_ROLLING_SKIP_MIN_MAX
+                skip_cum = param not in FMI_ROLLING_INCLUDE_CUMULATIVE
                 for wh in FMI_ROLLING_WINDOW_HOURS:
-                    col_names = get_fmi_rolling_column_names(param, wh, skip_min_max=skip)
+                    col_names = get_fmi_rolling_column_names(param, wh, skip_min_max=skip, skip_cumulative=skip_cum)
                     for stat_type, col_name in col_names.items():
                         if col_name in weather_data.columns:
                             missing_count = weather_data[col_name].isna().sum()
@@ -385,7 +426,8 @@ class DataLoader:
             # Show sample of the new columns for first available parameter
             first_param = available_params[0]
             first_skip = first_param in FMI_ROLLING_SKIP_MIN_MAX
-            first_col_names = get_fmi_rolling_column_names(first_param, FMI_ROLLING_WINDOW_HOURS[0], skip_min_max=first_skip)
+            first_skip_cum = first_param not in FMI_ROLLING_INCLUDE_CUMULATIVE
+            first_col_names = get_fmi_rolling_column_names(first_param, FMI_ROLLING_WINDOW_HOURS[0], skip_min_max=first_skip, skip_cumulative=first_skip_cum)
             sample_with_data = weather_data[weather_data[first_param].notna()].head(2)
             if not sample_with_data.empty:
                 print(f"  📋 Sample data ({first_param}, {FMI_ROLLING_WINDOW_HOURS[0]}h window):")
@@ -393,7 +435,9 @@ class DataLoader:
                     vals = f"Val: {row[first_param]:>7.1f}"
                     if not first_skip:
                         vals += f" | Max: {row[first_col_names['max']]:>7.1f} | Min: {row[first_col_names['min']]:>7.1f}"
-                    vals += f" | Mean: {row[first_col_names['mean']]:>7.2f} | Cum: {row[first_col_names['cumulative']]:>7.2f}"
+                    vals += f" | Mean: {row[first_col_names['mean']]:>7.2f}"
+                    if not first_skip_cum:
+                        vals += f" | Cum: {row[first_col_names['cumulative']]:>7.2f}"
                     print(f"     {row['timestamp']} | {row['station_name'][:20]:<20} | {vals}")
             print()
         
@@ -750,177 +794,246 @@ class DataLoader:
             body = f"The code has finished running successfully for {month}."
             send_email(subject, body)
 
+    def _save_delay_table_schema(self, csv_filename):
+        """Save a companion *_schema.csv describing every column in the delay table."""
+        schema_filename = csv_filename.replace('.csv', '_schema.csv')
+        schema_path = os.path.join(self.output_folder, schema_filename)
+        rows = [{'column': col, 'description': desc}
+                for col, desc in self._DELAY_TABLE_SCHEMA.items()]
+        pd.DataFrame(rows).to_csv(schema_path, index=False)
+
     def _track_delays_for_column(self, filtered_train_data, delay_column, csv_filename, month_str):
         """
-        Helper method to track delays for a specific delay column and save to CSV.
-        
+        Track daily delay statistics for one delay column variant and save to CSV.
+
+        Produces one row per calendar day with counts, rates, distributions, and
+        derived metrics. A companion *_schema.csv is written alongside with
+        plain-English descriptions of every column.
+
         Parameters:
-            filtered_train_data (pd.DataFrame): DataFrame containing filtered train data.
-            delay_column (str): Name of the delay column to track ('differenceInMinutes', 'differenceInMinutes_offset', etc.)
-            csv_filename (str): Name of the CSV file to save results to
-            month_str (str): The month in 'YYYY-MM' format.
+            filtered_train_data (pd.DataFrame): Filtered train data for the month.
+            delay_column (str): Delay column to aggregate ('differenceInMinutes',
+                'differenceInMinutes_offset', or 'differenceInMinutes_eachStation_offset').
+            csv_filename (str): Output CSV filename (basename only).
+            month_str (str): Month being processed in 'YYYY-MM' format.
         """
-        
-        # Initialize delay tracking
         delay_file_path = os.path.join(self.output_folder, csv_filename)
-        
-        # Initialize or load existing delay summary data
+
         if os.path.exists(delay_file_path):
             delay_summary_df = pd.read_csv(delay_file_path)
+            # Remove legacy column if present from older runs
+            if 'total_delay_minutes' in delay_summary_df.columns:
+                delay_summary_df = delay_summary_df.drop(columns=['total_delay_minutes'])
+            # Add any columns introduced in this version that don't exist yet
+            for col in self._DELAY_TABLE_COLUMNS:
+                if col not in delay_summary_df.columns:
+                    delay_summary_df[col] = pd.NA
             print(f"Loaded existing {delay_column} delay summary with {len(delay_summary_df)} records.")
         else:
-            delay_summary_df = pd.DataFrame(columns=[
-                "year", "month", "day_of_month", "day_of_week", 
-                "delay_count_by_day", "total_schedules_by_day",
-                "total_delay_minutes", "max_delay_minutes", "total_trains_on_route", 
-                "avg_delay_minutes", "top_10_common_delays"
-            ])
+            delay_summary_df = pd.DataFrame(columns=self._DELAY_TABLE_COLUMNS)
             print(f"Created new {delay_column} delay summary table.")
-        
-        # Extract year and month from month_str
-        year, month = month_str.split("-")
-        
-        # Initialize daily delay tracking dictionary
-        daily_delays = {}  # key: date_str, value: {'delay_count': int, 'total_schedules': int, ...}
-        
-        # Group filtered train data by departure date for daily processing
-        train_data_grouped = filtered_train_data.groupby('departureDate')
 
-        for departure_date, day_trains in train_data_grouped:        
-            # Initialize daily counters
-            day_delay_count = 0
-            day_total_schedules = 0
-            day_total_delay_minutes = 0
-            day_max_delay = 0
-            day_route_trains = set()
-            day_all_delays = []  # List to store all delay values for the day
-            
-            # Parse the departure date to get day of week
+        year, month = month_str.split("-")
+        daily_delays = {}
+
+        for departure_date, day_trains in filtered_train_data.groupby('departureDate'):
             try:
                 date_obj = datetime.strptime(departure_date, "%Y-%m-%d")
                 day_of_month = date_obj.day
-                day_of_week = date_obj.weekday() + 1  # Convert 0-6 to 1-7
+                day_of_week = date_obj.weekday() + 1  # 1=Monday … 7=Sunday
             except ValueError:
                 print(f"🚨 Invalid date format: {departure_date}")
                 continue
 
-            # Process trains for this specific date
-            for idx, train_row in day_trains.iterrows():
+            day_route_trains = set()
+            day_total_schedules = 0
+            day_cancelled_trains = 0
+            day_cancelled_stops = 0
+            day_first_stop_delays = 0
+            day_all_delays = []         # qualifying delay values for the tracked column
+            day_delay_arrivals = 0
+            day_delay_departures = 0
+            day_delay_by_type = Counter()  # trainType -> delayed-stop count
+            # Paired lists for propagation ratio (always uses raw differenceInMinutes)
+            day_raw_for_ratio = []
+            day_offset_for_ratio = []
+
+            for _, train_row in day_trains.iterrows():
                 train_number = train_row.trainNumber
+                train_type = str(getattr(train_row, 'trainType', None) or 'unknown')
+                train_cancelled = bool(getattr(train_row, 'cancelled', False))
                 timetable = train_row.timeTableRows
 
-                # Fix timetable format if it's a string
+                if train_cancelled:
+                    day_cancelled_trains += 1
+
                 if isinstance(timetable, str):
                     try:
-                        timetable_fixed = timetable.replace("'", '"') \
-                                                    .replace("True", "true") \
-                                                    .replace("False", "false") \
-                                                    .replace("None", "null")
-
+                        timetable_fixed = (timetable
+                                           .replace("'", '"')
+                                           .replace("True", "true")
+                                           .replace("False", "false")
+                                           .replace("None", "null"))
                         timetable = json.loads(timetable_fixed)
                         if not isinstance(timetable, list):
                             raise ValueError("Decoded timetable is not a list")
-
                     except json.JSONDecodeError as e:
                         print(f"🚨 Failed to decode timetable for train {train_number} on {departure_date}: {e}")
-                        timetable = []  # Fallback to empty list
+                        timetable = []
 
-                # Count this train
                 day_route_trains.add(train_number)
-                
-                # Count all station stops for these trains
-                if isinstance(timetable, list):
-                    day_total_schedules += len(timetable)
 
-                # Iterate over each station stop in the timetable
-                for train_track in timetable:
-                    # Track delays for the specific column
-                    delay_value = train_track.get(delay_column)
-                    if delay_value is not None and delay_value >= DELAY_LONG_DISTANCE_TRAINS:
-                        # Increment delay counter for this day
-                        day_delay_count += 1
-                        day_total_delay_minutes += delay_value
-                        day_max_delay = max(day_max_delay, delay_value)
-                        day_all_delays.append(delay_value)  # Store the delay value
+                if not isinstance(timetable, list):
+                    continue
 
-            # Calculate average delay for the day
-            day_avg_delay = day_total_delay_minutes / day_delay_count if day_delay_count > 0 else 0
+                day_total_schedules += len(timetable)
 
-            # Find top 10 most common delays
-            if day_all_delays:
-                delay_counter = Counter(day_all_delays)
-                # Get top 10 most common delays (returns list of tuples [(delay, count), ...])
-                top_10_delays = delay_counter.most_common(10)
-                # Extract just the delay values
-                top_10_delay_values = [delay for delay, count in top_10_delays]
+                # First-stop delay (always uses raw differenceInMinutes regardless of delay_column)
+                if timetable:
+                    first_raw = timetable[0].get("differenceInMinutes")
+                    if first_raw is not None and first_raw >= DELAY_LONG_DISTANCE_TRAINS:
+                        day_first_stop_delays += 1
+
+                for stop in timetable:
+                    # Stop-level cancellation
+                    if bool(stop.get("cancelled", False)):
+                        day_cancelled_stops += 1
+
+                    # Data for propagation ratio: pair raw delay with per-stop offset
+                    raw_diff = stop.get("differenceInMinutes")
+                    each_offset = stop.get("differenceInMinutes_eachStation_offset")
+                    if raw_diff is not None and raw_diff > 0 and each_offset is not None:
+                        day_raw_for_ratio.append(raw_diff)
+                        day_offset_for_ratio.append(each_offset)
+
+                    # Tracked delay column stats
+                    delay_value = stop.get(delay_column)
+                    if delay_value is None or delay_value < DELAY_LONG_DISTANCE_TRAINS:
+                        continue
+
+                    day_all_delays.append(delay_value)
+                    day_delay_by_type[train_type] += 1
+
+                    stop_type = stop.get("type", "")
+                    if stop_type == "ARRIVAL":
+                        day_delay_arrivals += 1
+                    elif stop_type == "DEPARTURE":
+                        day_delay_departures += 1
+
+            # --- Derived statistics ---
+            n_delayed = len(day_all_delays)
+            n_trains = len(day_route_trains)
+
+            day_avg_delay = round(sum(day_all_delays) / n_delayed, 2) if n_delayed > 0 else 0
+            day_median_delay = round(float(pd.Series(day_all_delays).median()), 2) if day_all_delays else 0
+            day_max_delay = max(day_all_delays) if day_all_delays else 0
+            day_delay_rate = round(n_delayed / day_total_schedules, 4) if day_total_schedules > 0 else 0
+            day_avg_stops = round(day_total_schedules / n_trains, 2) if n_trains > 0 else 0
+
+            if day_raw_for_ratio:
+                mean_raw = sum(day_raw_for_ratio) / len(day_raw_for_ratio)
+                mean_offset = sum(day_offset_for_ratio) / len(day_offset_for_ratio)
+                propagation_ratio = round(mean_offset / mean_raw, 4) if mean_raw != 0 else None
             else:
-                top_10_delay_values = []
+                propagation_ratio = None
 
-            # Store daily statistics
+            top_10 = [d for d, _ in Counter(day_all_delays).most_common(10)]
+
             daily_delays[departure_date] = {
                 'year': year,
                 'month': month,
                 'day_of_month': day_of_month,
                 'day_of_week': day_of_week,
-                'delay_count': day_delay_count,
+                'total_trains_on_route': n_trains,
                 'total_schedules': day_total_schedules,
-                'total_delay_minutes': day_total_delay_minutes,
+                'avg_stops_per_train': day_avg_stops,
+                'cancelled_trains': day_cancelled_trains,
+                'cancelled_stops': day_cancelled_stops,
+                'delay_count': n_delayed,
+                'delay_rate': day_delay_rate,
+                'delay_count_arrivals': day_delay_arrivals,
+                'delay_count_departures': day_delay_departures,
                 'max_delay_minutes': day_max_delay,
-                'total_trains_on_route': len(day_route_trains),
-                'avg_delay_minutes': round(day_avg_delay, 2),
-                'top_10_common_delays': str(top_10_delay_values)
+                'avg_delay_minutes': day_avg_delay,
+                'median_delay_minutes': day_median_delay,
+                'delays_5_15min': sum(1 for d in day_all_delays if 5 <= d < 15),
+                'delays_15_30min': sum(1 for d in day_all_delays if 15 <= d < 30),
+                'delays_30_60min': sum(1 for d in day_all_delays if 30 <= d < 60),
+                'delays_over_60min': sum(1 for d in day_all_delays if d >= 60),
+                'first_stop_delay_count': day_first_stop_delays,
+                'delay_propagation_ratio': propagation_ratio,
+                'delay_count_by_train_type': json.dumps(dict(day_delay_by_type)),
+                'top_10_common_delays': str(top_10),
             }
 
-        # Update and save delay summary table with daily data
-        for date_str, daily_stats in daily_delays.items():
-            # Check if this date already exists in summary
-            date_exists = ((delay_summary_df['year'] == daily_stats['year']) & 
-                        (delay_summary_df['month'] == daily_stats['month']) &
-                        (delay_summary_df['day_of_month'] == daily_stats['day_of_month'])).any()
-            
-            if date_exists:
-                # Update existing entry
-                mask = ((delay_summary_df['year'] == daily_stats['year']) & 
-                    (delay_summary_df['month'] == daily_stats['month']) &
-                    (delay_summary_df['day_of_month'] == daily_stats['day_of_month']))
-                delay_summary_df.loc[mask, 'day_of_week'] = daily_stats['day_of_week']
-                delay_summary_df.loc[mask, 'delay_count_by_day'] = daily_stats['delay_count']
-                delay_summary_df.loc[mask, 'total_schedules_by_day'] = daily_stats['total_schedules']
-                delay_summary_df.loc[mask, 'total_delay_minutes'] = daily_stats['total_delay_minutes']
-                delay_summary_df.loc[mask, 'max_delay_minutes'] = daily_stats['max_delay_minutes']
-                delay_summary_df.loc[mask, 'total_trains_on_route'] = daily_stats['total_trains_on_route']
-                delay_summary_df.loc[mask, 'avg_delay_minutes'] = daily_stats['avg_delay_minutes']
-                delay_summary_df.loc[mask, 'top_10_common_delays'] = daily_stats['top_10_common_delays']
+        # --- Upsert into summary DataFrame ---
+        for date_str, s in daily_delays.items():
+            row_data = {
+                'year':                      s['year'],
+                'month':                     s['month'],
+                'day_of_month':              s['day_of_month'],
+                'day_of_week':               s['day_of_week'],
+                'total_trains_on_route':     s['total_trains_on_route'],
+                'total_schedules_by_day':    s['total_schedules'],
+                'avg_stops_per_train':       s['avg_stops_per_train'],
+                'cancelled_trains_by_day':   s['cancelled_trains'],
+                'cancelled_stops_by_day':    s['cancelled_stops'],
+                'delay_count_by_day':        s['delay_count'],
+                'delay_rate':                s['delay_rate'],
+                'delay_count_arrivals':      s['delay_count_arrivals'],
+                'delay_count_departures':    s['delay_count_departures'],
+                'max_delay_minutes':         s['max_delay_minutes'],
+                'avg_delay_minutes':         s['avg_delay_minutes'],
+                'median_delay_minutes':      s['median_delay_minutes'],
+                'delays_5_15min':            s['delays_5_15min'],
+                'delays_15_30min':           s['delays_15_30min'],
+                'delays_30_60min':           s['delays_30_60min'],
+                'delays_over_60min':         s['delays_over_60min'],
+                'first_stop_delay_count':    s['first_stop_delay_count'],
+                'delay_propagation_ratio':   s['delay_propagation_ratio'],
+                'delay_count_by_train_type': s['delay_count_by_train_type'],
+                'top_10_common_delays':      s['top_10_common_delays'],
+            }
+
+            mask = (
+                (delay_summary_df['year'].astype(str) == str(s['year'])) &
+                (delay_summary_df['month'].astype(str) == str(s['month'])) &
+                (delay_summary_df['day_of_month'].astype(str) == str(s['day_of_month']))
+            )
+
+            if mask.any():
+                for col, val in row_data.items():
+                    delay_summary_df.loc[mask, col] = val
             else:
-                # Add new entry
-                new_row = pd.DataFrame([{
-                    'year': daily_stats['year'], 
-                    'month': daily_stats['month'],
-                    'day_of_month': daily_stats['day_of_month'],
-                    'day_of_week': daily_stats['day_of_week'],
-                    'delay_count_by_day': daily_stats['delay_count'],
-                    'total_schedules_by_day': daily_stats['total_schedules'],
-                    'total_delay_minutes': daily_stats['total_delay_minutes'],
-                    'max_delay_minutes': daily_stats['max_delay_minutes'],
-                    'total_trains_on_route': daily_stats['total_trains_on_route'],
-                    'avg_delay_minutes': daily_stats['avg_delay_minutes'],
-                    'top_10_common_delays': daily_stats['top_10_common_delays']
-                }])
-                delay_summary_df = pd.concat([delay_summary_df, new_row], ignore_index=True)
-        
-        # Sort by year, month, and day
-        delay_summary_df = delay_summary_df.sort_values(by=['year', 'month', 'day_of_month']).reset_index(drop=True)
-        
-        # Save updated summary
+                delay_summary_df = pd.concat(
+                    [delay_summary_df, pd.DataFrame([row_data])], ignore_index=True
+                )
+
+        # Sort chronologically before computing the rolling stat
+        delay_summary_df = (delay_summary_df
+                            .sort_values(by=['year', 'month', 'day_of_month'])
+                            .reset_index(drop=True))
+
+        # 7-row rolling mean of delay_rate over the full sorted history
+        delay_summary_df['rolling_delay_rate_7d'] = (
+            delay_summary_df['delay_rate']
+            .rolling(window=7, min_periods=1)
+            .mean()
+            .round(4)
+        )
+
+        # Enforce canonical column order
+        delay_summary_df = delay_summary_df[self._DELAY_TABLE_COLUMNS]
+
         delay_summary_df.to_csv(delay_file_path, index=False)
-        
-        # Calculate totals for the month
-        total_month_delays = sum(stats['delay_count'] for stats in daily_delays.values())
-        total_month_schedules = sum(stats['total_schedules'] for stats in daily_delays.values())
-        total_month_trains = sum(stats['total_trains_on_route'] for stats in daily_delays.values())
-        
+        self._save_delay_table_schema(csv_filename)
+
+        total_month_delays = sum(s['delay_count'] for s in daily_delays.values())
+        total_month_schedules = sum(s['total_schedules'] for s in daily_delays.values())
+        total_month_trains = sum(s['total_trains_on_route'] for s in daily_delays.values())
+
         print(f"✅ Updated {delay_column} delay summary for {month_str}: {len(daily_delays)} days processed.")
-        print(f"   {delay_column} Summary: {total_month_delays} delays out of {total_month_schedules} schedules from {total_month_trains} total trains.")
+        print(f"   {delay_column} Summary: {total_month_delays} delays / {total_month_schedules} schedules / {total_month_trains} trains.")
 
     def merge_train_weather_data(self, train_data, weather_data, month_str):
         """
@@ -1241,8 +1354,9 @@ class DataLoader:
         columns_to_extract = [target_column]
         if target_column in FMI_ROLLING_WINDOW_PARAMS:
             skip_min_max = target_column in FMI_ROLLING_SKIP_MIN_MAX
+            skip_cumulative = target_column not in FMI_ROLLING_INCLUDE_CUMULATIVE
             for window_hours in FMI_ROLLING_WINDOW_HOURS:
-                rolling_names = get_fmi_rolling_column_names(target_column, window_hours, skip_min_max)
+                rolling_names = get_fmi_rolling_column_names(target_column, window_hours, skip_min_max, skip_cumulative)
                 columns_to_extract.extend(rolling_names.values())
 
         # Iterate through precomputed top-5 closest EMS stations (already sorted by distance)

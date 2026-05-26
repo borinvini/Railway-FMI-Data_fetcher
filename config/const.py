@@ -42,15 +42,19 @@ FMI_ROLLING_WINDOW_PARAMS = [
 # Precipitation amount already represents 1h accumulated values
 FMI_ROLLING_SKIP_MIN_MAX = ["Precipitation amount"]
 
+# Only these parameters get a cumulative (sum) rolling feature
+FMI_ROLLING_INCLUDE_CUMULATIVE = ["Precipitation amount"]
+
 # Helper function to generate column names for rolling features
-def get_fmi_rolling_column_names(param_name, window_hours, skip_min_max=False):
+def get_fmi_rolling_column_names(param_name, window_hours, skip_min_max=False, skip_cumulative=False):
     """
     Generate standardized column names for rolling window statistics.
 
     Args:
         param_name (str): The base parameter name (e.g., "Air temperature")
         window_hours (int): The rolling window size in hours
-        skip_min_max (bool): If True, only return mean and cumulative keys
+        skip_min_max (bool): If True, omit max and min keys
+        skip_cumulative (bool): If True, omit cumulative key
 
     Returns:
         dict: Dictionary with keys for each statistic and their column names
@@ -60,7 +64,8 @@ def get_fmi_rolling_column_names(param_name, window_hours, skip_min_max=False):
         names['max'] = f"{param_name} ({window_hours}h max)"
         names['min'] = f"{param_name} ({window_hours}h min)"
     names['mean'] = f"{param_name} ({window_hours}h mean)"
-    names['cumulative'] = f"{param_name} ({window_hours}h cumulative)"
+    if not skip_cumulative:
+        names['cumulative'] = f"{param_name} ({window_hours}h cumulative)"
     return names
 
 
