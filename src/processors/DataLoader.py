@@ -8,7 +8,7 @@ import pandas as pd
 from glob import glob
 from haversine import haversine, Unit
 from collections import Counter
-from config.const import ALTERNATIVE_WEATHER_COLUMN, CSV_ALL_TRAINS, CSV_ALL_TRAINS_FLAT, CSV_CLOSEST_EMS_TRAIN, CSV_TOP5_CLOSEST_EMS_TRAIN, CSV_DELAY_TABLE_EACH_STATION, CSV_DELAY_TABLE_OFFSET, CSV_DELAY_TABLE_ORIGINAL, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_MATCHED_DATA_FLAT, CSV_TRAIN_STATIONS, DELAY_LONG_DISTANCE_TRAINS, FILTER_BY_ROUTE, FILTER_BY_TRAIN_CATEGORY, FMI_ROLLING_WINDOW_HOURS, FMI_ROLLING_WINDOW_PARAMS, FMI_ROLLING_SKIP_MIN_MAX, FMI_ROLLING_INCLUDE_CUMULATIVE, FOLDER_NAME, MANDATORY_STATIONS, TRAIN_CATEGORY_FILTER, get_fmi_rolling_column_names
+from config.const import ALTERNATIVE_WEATHER_COLUMN, CSV_ALL_TRAINS, CSV_ALL_TRAINS_FLAT, CSV_CLOSEST_EMS_TRAIN, CSV_TOP5_CLOSEST_EMS_TRAIN, CSV_DELAY_TABLE_EACH_STATION, CSV_DELAY_TABLE_OFFSET, CSV_DELAY_TABLE_ORIGINAL, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_MATCHED_DATA_FLAT, CSV_TRAIN_STATIONS, DELAY_LONG_DISTANCE_TRAINS, FILTER_BY_ROUTE, FILTER_BY_TRAIN_CATEGORY, FMI_ROLLING_WINDOW_HOURS, FMI_ROLLING_WINDOW_PARAMS, FMI_ROLLING_SKIP_MIN_MAX, FMI_ROLLING_INCLUDE_CUMULATIVE, FOLDER_NAME, MANDATORY_STATIONS, PARQUET_ALL_TRAINS_FLAT, PARQUET_FMI, PARQUET_MATCHED_DATA_FLAT, TRAIN_CATEGORY_FILTER, get_fmi_rolling_column_names
 from config.const import send_email
 
 class DataLoader:
@@ -617,6 +617,72 @@ class DataLoader:
             print(f"  ✅ Saved {total_rows_written} rows to {flat_filename}")
 
         print(f"\n✅ Flat matched data conversion complete.")
+        print(f"{'='*60}\n")
+
+    def convert_to_parquet(self):
+        """
+        Convert monthly flat train, FMI weather, and flat matched CSV files to Parquet.
+
+        For each source type, finds all monthly CSVs in the output folder, reads each
+        one with pandas, and writes a matching .parquet file using pyarrow. Skips months
+        where the parquet file already exists. Errors on individual files are caught and
+        reported without aborting the remaining conversions.
+        """
+        print(f"\n{'='*60}")
+        print("STEP 4: Converting monthly CSV files to Parquet")
+        print(f"{'='*60}")
+
+        sources = [
+            (
+                f"{CSV_ALL_TRAINS_FLAT.replace('.csv', '')}_[0-9]*.csv",
+                PARQUET_ALL_TRAINS_FLAT,
+                "Flat train data",
+            ),
+            (
+                f"{CSV_FMI.replace('.csv', '')}*.csv",
+                PARQUET_FMI,
+                "FMI weather data",
+            ),
+            (
+                f"{CSV_MATCHED_DATA_FLAT.replace('.csv', '')}_[0-9]*.csv",
+                PARQUET_MATCHED_DATA_FLAT,
+                "Flat matched data",
+            ),
+        ]
+
+        for csv_pattern, parquet_base, label in sources:
+            csv_files = glob(os.path.join(self.output_folder, csv_pattern))
+
+            if not csv_files:
+                print(f"\n⚠️  No {label} CSV files found. Skipping.")
+                continue
+
+            print(f"\n📦 Converting {label} ({len(csv_files)} file(s))...")
+
+            for csv_file in sorted(csv_files):
+                dates = self._extract_dates_from_filenames([csv_file])
+                if not dates:
+                    print(f"  ⚠️  Could not extract date from {os.path.basename(csv_file)}. Skipping.")
+                    continue
+
+                month_period = pd.Period(dates[0], freq='M')
+                base = parquet_base.replace('.parquet', '')
+                parquet_filename = f"{base}_{month_period.year}_{month_period.month:02d}.parquet"
+                parquet_filepath = os.path.join(self.output_folder, parquet_filename)
+
+                if os.path.exists(parquet_filepath):
+                    print(f"  ℹ️  {parquet_filename} already exists. Skipping.")
+                    continue
+
+                try:
+                    print(f"  📊 Converting {os.path.basename(csv_file)}...")
+                    df = pd.read_csv(csv_file)
+                    df.to_parquet(parquet_filepath, engine='pyarrow', index=False)
+                    print(f"  ✅ Saved {len(df)} rows × {len(df.columns)} columns → {parquet_filename}")
+                except Exception as e:
+                    print(f"  ❌ Failed to convert {os.path.basename(csv_file)}: {e}")
+
+        print(f"\n✅ Parquet conversion complete.")
         print(f"{'='*60}\n")
 
     def _find_closest_ems(self, train_lat, train_long, ems_stations):
