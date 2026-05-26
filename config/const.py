@@ -101,6 +101,11 @@ CSV_MATCHED_DATA = "matched_data.csv"
 CSV_ALL_TRAINS_FLAT = "all_trains_data_flat.csv"
 CSV_MATCHED_DATA_FLAT = "matched_data_flat.csv"
 
+# Parquet base filenames (monthly files: {base}_{YYYY}_{MM}.parquet)
+PARQUET_ALL_TRAINS_FLAT   = "all_trains_data_flat.parquet"
+PARQUET_FMI               = "fmi_weather_observations.parquet"
+PARQUET_MATCHED_DATA_FLAT = "matched_data_flat.parquet"
+
 CSV_DELAY_TABLE_ORIGINAL = "delay_table_differenceInMinutes.csv"
 CSV_DELAY_TABLE_OFFSET = "delay_table_differenceInMinutes_offset.csv" 
 CSV_DELAY_TABLE_EACH_STATION = "delay_table_differenceInMinutes_eachStation_offset.csv"
