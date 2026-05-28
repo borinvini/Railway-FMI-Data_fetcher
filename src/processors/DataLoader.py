@@ -676,7 +676,7 @@ class DataLoader:
 
                 try:
                     print(f"  📊 Converting {os.path.basename(csv_file)}...")
-                    df = pd.read_csv(csv_file)
+                    df = pd.read_csv(csv_file, low_memory=False, on_bad_lines='skip')
                     df.to_parquet(parquet_filepath, engine='pyarrow', index=False)
                     print(f"  ✅ Saved {len(df)} rows × {len(df.columns)} columns → {parquet_filename}")
                 except Exception as e:
