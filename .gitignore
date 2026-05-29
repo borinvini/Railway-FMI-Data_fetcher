@@ -27,6 +27,7 @@ logs/
 # Ignore Data Files (Optional: Only ignore CSVs if they are generated)
 data/*.csv
 output_data/*.csv
+*.parquet
 *.json
 
 # Ignore Jupyter Notebook checkpoints (if using notebooks)
