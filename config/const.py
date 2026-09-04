@@ -1,3 +1,17 @@
+import os
+
+# Load environment variables from a local .env file, if present.
+# .env is git-ignored; see .env.example for the expected keys. Values already
+# set in the real environment win, so exporting a variable in the shell
+# overrides the file. Absent python-dotenv or .env, os.getenv still reads the
+# process environment and everything below degrades gracefully.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
+except ImportError:
+    pass
+
 # PARAMETERS
 START_DATE = "2024-01-01" # YYYY-MM-DD
 END_DATE = "2024-01-01" # YYYY-MM-DD
@@ -145,7 +159,6 @@ DAY_OF_WEEK_MAPPING = {
 #   FETCHER_EMAIL_ADDRESS
 #   FETCHER_EMAIL_PASSWORD
 # If EMAIL_ADDRESS or EMAIL_PASSWORD is unset, notifications are skipped silently.
-import os
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
