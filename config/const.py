@@ -19,8 +19,24 @@ FMI_BBOX = "18,55,35,75" # Bounding box for Finland
 #FMI_BBOX = "20.8,59.4,27.2,67.6"
 
 # Alternative weather data search parameters
-ALTERNATIVE_WEATHER_COLUMN = ["Snow depth", "Precipitation amount", "Precipitation intensity", "Horizontal visibility", "Wind speed", "Gust speed"] # Target column name for alternative search
 ALTERNATIVE_WEATHER_RADIUS_KM = 50  # Maximum radius in kilometers for alternative weather station search
+
+# All instant (non-rolling) FMI weather parameters — used to drive per-feature top-5 fallback
+FMI_INSTANT_PARAMS = [
+    "Air temperature",
+    "Wind speed",
+    "Gust speed",
+    "Wind direction",
+    "Relative humidity",
+    "Dew-point temperature",
+    "Precipitation amount",
+    "Precipitation intensity",
+    "Snow depth",
+    "Pressure (msl)",
+    "Horizontal visibility",
+    "Cloud amount",
+    "Present weather (auto)",
+]
 
 # FMI Weather preprocessing parameters
 FMI_ROLLING_WINDOW_HOURS = [12, 24, 72]  # Rolling window sizes in hours
@@ -121,17 +137,37 @@ DAY_OF_WEEK_MAPPING = {
     7: "Sunday"
 }
 
-# Email configuration
-SMTP_SERVER = 'smtp.gmail.com'
-SMTP_PORT = 587
-EMAIL_ADDRESS = 'borin.vini@gmail.com'  # Your email
-EMAIL_PASSWORD = 'qaon nrrc yhsq vrbg'    # Use an app password if you have 2FA enabled
-
+# Email notification configuration
+# Credentials are read from the environment, never stored in this file.
+# Set them in a local .env (git-ignored) or export them in your shell:
+#   FETCHER_SMTP_SERVER   (default: smtp.gmail.com)
+#   FETCHER_SMTP_PORT     (default: 587)
+#   FETCHER_EMAIL_ADDRESS
+#   FETCHER_EMAIL_PASSWORD
+# If EMAIL_ADDRESS or EMAIL_PASSWORD is unset, notifications are skipped silently.
+import os
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
+SMTP_SERVER = os.getenv('FETCHER_SMTP_SERVER', 'smtp.gmail.com')
+SMTP_PORT = int(os.getenv('FETCHER_SMTP_PORT', '587'))
+EMAIL_ADDRESS = os.getenv('FETCHER_EMAIL_ADDRESS')
+EMAIL_PASSWORD = os.getenv('FETCHER_EMAIL_PASSWORD')
+
+
 def send_email(subject, body):
+    """
+    Send a progress notification email.
+
+    No-op when FETCHER_EMAIL_ADDRESS / FETCHER_EMAIL_PASSWORD are not set, so the
+    pipeline runs unchanged on machines without mail configured.
+    """
+    if not EMAIL_ADDRESS or not EMAIL_PASSWORD:
+        print("[info] Email notifications not configured (set FETCHER_EMAIL_ADDRESS "
+              "and FETCHER_EMAIL_PASSWORD). Skipping.")
+        return
+
     msg = MIMEMultipart()
     msg['From'] = EMAIL_ADDRESS
     msg['To'] = EMAIL_ADDRESS  # Send to yourself or modify to any recipient
@@ -146,6 +182,6 @@ def send_email(subject, body):
         server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
         server.sendmail(EMAIL_ADDRESS, EMAIL_ADDRESS, msg.as_string())
         server.quit()
-        print("✅ Email sent successfully.")
+        print("[ok] Email sent successfully.")
     except Exception as e:
-        print(f"❌ Failed to send email: {e}")
+        print(f"[warn] Failed to send email: {e}")
