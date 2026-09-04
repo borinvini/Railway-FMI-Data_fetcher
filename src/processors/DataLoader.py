@@ -8,7 +8,7 @@ import pandas as pd
 from glob import glob
 from haversine import haversine, Unit
 from collections import Counter
-from config.const import ALTERNATIVE_WEATHER_COLUMN, CSV_ALL_TRAINS, CSV_ALL_TRAINS_FLAT, CSV_CLOSEST_EMS_TRAIN, CSV_TOP5_CLOSEST_EMS_TRAIN, CSV_DELAY_TABLE_EACH_STATION, CSV_DELAY_TABLE_OFFSET, CSV_DELAY_TABLE_ORIGINAL, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_MATCHED_DATA_FLAT, CSV_TRAIN_STATIONS, DELAY_LONG_DISTANCE_TRAINS, FILTER_BY_ROUTE, FILTER_BY_TRAIN_CATEGORY, FMI_ROLLING_WINDOW_HOURS, FMI_ROLLING_WINDOW_PARAMS, FMI_ROLLING_SKIP_MIN_MAX, FMI_ROLLING_INCLUDE_CUMULATIVE, FOLDER_NAME, MANDATORY_STATIONS, PARQUET_ALL_TRAINS_FLAT, PARQUET_FMI, PARQUET_MATCHED_DATA_FLAT, TRAIN_CATEGORY_FILTER, get_fmi_rolling_column_names
+from config.const import CSV_ALL_TRAINS, CSV_ALL_TRAINS_FLAT, CSV_CLOSEST_EMS_TRAIN, CSV_TOP5_CLOSEST_EMS_TRAIN, CSV_DELAY_TABLE_EACH_STATION, CSV_DELAY_TABLE_OFFSET, CSV_DELAY_TABLE_ORIGINAL, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_MATCHED_DATA_FLAT, CSV_TRAIN_STATIONS, DELAY_LONG_DISTANCE_TRAINS, FILTER_BY_ROUTE, FILTER_BY_TRAIN_CATEGORY, FMI_INSTANT_PARAMS, FMI_ROLLING_WINDOW_HOURS, FMI_ROLLING_WINDOW_PARAMS, FMI_ROLLING_SKIP_MIN_MAX, FMI_ROLLING_INCLUDE_CUMULATIVE, FOLDER_NAME, MANDATORY_STATIONS, PARQUET_ALL_TRAINS_FLAT, PARQUET_FMI, PARQUET_MATCHED_DATA_FLAT, TRAIN_CATEGORY_FILTER, get_fmi_rolling_column_names
 from config.const import send_email
 
 class DataLoader:
@@ -562,51 +562,37 @@ class DataLoader:
                 continue
 
             print(f"📊 Converting {os.path.basename(matched_file)}...")
+
+            # Pass 1: discover the full, ordered column union across every chunk.
+            # The flat rows are written chunk-by-chunk in append mode with the
+            # header taken from the first chunk only. Per-chunk DataFrames infer
+            # their columns from the keys present in that chunk, so an optional
+            # stop-level key absent from the first chunk but present in a later
+            # one (e.g. 'unknownTrack') would add a column the header never had,
+            # silently shifting every subsequent column. Collecting the union up
+            # front lets every chunk be written against one fixed schema.
+            column_order = {}  # dict preserves first-seen insertion order
+            for chunk in pd.read_csv(matched_file, chunksize=500):
+                for row in self._flatten_matched_chunk(chunk, train_level_cols):
+                    for key in row:
+                        column_order.setdefault(key)
+
+            if not column_order:
+                print(f"  ⚠️ No rows to save for {flat_filename}. Skipping.")
+                continue
+
+            master_cols = list(column_order)
+
+            # Pass 2: write each chunk reindexed to the fixed schema so every row
+            # has identical columns, in identical order, as the header.
             total_rows_written = 0
             first_chunk = True
-
             for chunk in pd.read_csv(matched_file, chunksize=500):
-                rows = []
-
-                for _, train_row in chunk.iterrows():
-                    timetable_raw = train_row['timeTableRows']
-                    try:
-                        timetable = ast.literal_eval(timetable_raw) if isinstance(timetable_raw, str) else timetable_raw
-                    except (ValueError, SyntaxError):
-                        try:
-                            timetable_fixed = timetable_raw.replace("'", '"') \
-                                                            .replace("True", "true") \
-                                                            .replace("False", "false") \
-                                                            .replace("None", "null") \
-                                                            .replace(": nan", ": null")
-                            timetable = json.loads(timetable_fixed)
-                        except (json.JSONDecodeError, Exception) as e:
-                            print(f"⚠️ Failed to parse timeTableRows for train {train_row.get('trainNumber')}: {e}")
-                            continue
-
-                    if not isinstance(timetable, list):
-                        continue
-
-                    train_base = {col: train_row.get(col) for col in train_level_cols if col in train_row.index}
-
-                    for stop in timetable:
-                        row = dict(train_base)
-                        for key, value in stop.items():
-                            if key == 'cancelled':
-                                row['stop_cancelled'] = value
-                            elif key == 'causes':
-                                row['causes'] = str(value)
-                            elif key == 'trainReady':
-                                row['trainReady'] = str(value) if value is not None else None
-                            elif key == 'weather_observations':
-                                if isinstance(value, dict):
-                                    row.update(value)
-                            else:
-                                row[key] = value
-                        rows.append(row)
-
+                rows = self._flatten_matched_chunk(chunk, train_level_cols)
                 if rows:
-                    pd.DataFrame(rows).to_csv(flat_filepath, mode='a', header=first_chunk, index=False)
+                    pd.DataFrame(rows).reindex(columns=master_cols).to_csv(
+                        flat_filepath, mode='a', header=first_chunk, index=False
+                    )
                     total_rows_written += len(rows)
                     first_chunk = False
 
@@ -618,6 +604,53 @@ class DataLoader:
 
         print(f"\n✅ Flat matched data conversion complete.")
         print(f"{'='*60}\n")
+
+    def _flatten_matched_chunk(self, chunk, train_level_cols):
+        """Explode one chunk of matched train rows into flat per-stop dicts.
+
+        Parses each train's timeTableRows (falling back to JSON when the Python
+        literal contains nan/None/True/False), flattens the weather_observations
+        dict into top-level keys, and renames the stop-level 'cancelled' flag to
+        'stop_cancelled'. Returns a list of row dicts, one per station stop.
+        """
+        rows = []
+        for _, train_row in chunk.iterrows():
+            timetable_raw = train_row['timeTableRows']
+            try:
+                timetable = ast.literal_eval(timetable_raw) if isinstance(timetable_raw, str) else timetable_raw
+            except (ValueError, SyntaxError):
+                try:
+                    timetable_fixed = timetable_raw.replace("'", '"') \
+                                                    .replace("True", "true") \
+                                                    .replace("False", "false") \
+                                                    .replace("None", "null") \
+                                                    .replace(": nan", ": null")
+                    timetable = json.loads(timetable_fixed)
+                except (json.JSONDecodeError, Exception) as e:
+                    print(f"⚠️ Failed to parse timeTableRows for train {train_row.get('trainNumber')}: {e}")
+                    continue
+
+            if not isinstance(timetable, list):
+                continue
+
+            train_base = {col: train_row.get(col) for col in train_level_cols if col in train_row.index}
+
+            for stop in timetable:
+                row = dict(train_base)
+                for key, value in stop.items():
+                    if key == 'cancelled':
+                        row['stop_cancelled'] = value
+                    elif key == 'causes':
+                        row['causes'] = str(value)
+                    elif key == 'trainReady':
+                        row['trainReady'] = str(value) if value is not None else None
+                    elif key == 'weather_observations':
+                        if isinstance(value, dict):
+                            row.update(value)
+                    else:
+                        row[key] = value
+                rows.append(row)
+        return rows
 
     def convert_to_parquet(self):
         """
@@ -1494,57 +1527,59 @@ class DataLoader:
             return {}
 
         if ems_station not in self.ems_weather_dict:
-            print(f"🚨 No weather data available for EMS '{ems_station}'")
-            return {}
-
-        station_weather_df = self.ems_weather_dict[ems_station]
-
-        # Convert timestamps to numpy array for fast lookup
-        timestamps = station_weather_df["timestamp"].to_numpy(dtype="datetime64[ns]")
-
-        # Convert scheduled time to numpy datetime64
-        scheduled_time_np = np.datetime64(scheduled_time_dt)
-
-        # Use np.searchsorted for fast timestamp lookup
-        idx = np.searchsorted(timestamps, scheduled_time_np)
-
-        # Handle edge cases for boundary timestamps
-        if idx == 0:
-            closest_idx = 0
-        elif idx >= len(timestamps):
-            closest_idx = len(timestamps) - 1
+            print(f"⚠️ Primary EMS '{ems_station}' not in weather data — falling back to top-5 alternatives for all features.")
+            weather_dict = {}
         else:
-            before = abs(timestamps[idx - 1] - scheduled_time_np)
-            after = abs(timestamps[idx] - scheduled_time_np)
-            closest_idx = idx if after < before else idx - 1
+            station_weather_df = self.ems_weather_dict[ems_station]
 
-        closest_row = station_weather_df.iloc[closest_idx]
+            timestamps = station_weather_df["timestamp"].to_numpy(dtype="datetime64[ns]")
+            scheduled_time_np = np.datetime64(scheduled_time_dt)
 
-        weather_dict = closest_row.drop(["station_name"]).to_dict()
-        weather_dict = {"closest_ems": closest_row["station_name"], **weather_dict}
+            idx = np.searchsorted(timestamps, scheduled_time_np)
+            if idx == 0:
+                closest_idx = 0
+            elif idx >= len(timestamps):
+                closest_idx = len(timestamps) - 1
+            else:
+                before = abs(timestamps[idx - 1] - scheduled_time_np)
+                after = abs(timestamps[idx] - scheduled_time_np)
+                closest_idx = idx if after < before else idx - 1
 
-        # Remove the timestamp key (not needed in output)
-        weather_dict.pop("timestamp", None)
+            closest_row = station_weather_df.iloc[closest_idx]
+            weather_dict = closest_row.drop(["station_name"]).to_dict()
+            weather_dict = {"closest_ems": closest_row["station_name"], **weather_dict}
+            weather_dict.pop("timestamp", None)
 
-
-        # Ensure ALTERNATIVE_WEATHER_COLUMN is a list
-        weather_features = ALTERNATIVE_WEATHER_COLUMN if isinstance(ALTERNATIVE_WEATHER_COLUMN, list) else [ALTERNATIVE_WEATHER_COLUMN]
-
-        # Check each weather feature for missing data and search for alternatives
-        for feature_name in weather_features:
-            target_weather_value = weather_dict.get(feature_name)
-
-            if pd.isna(target_weather_value) or target_weather_value is None:
-                # Search for alternative weather data (instant + rolling) for this feature
+        # For every instant weather feature, fall back to the top-5 alternatives if the value is missing.
+        # _find_alternative_weather_data also fills rolling window columns from the same station as a
+        # side-effect, so many rolling windows get populated here too.
+        for feature_name in FMI_INSTANT_PARAMS:
+            if pd.isna(weather_dict.get(feature_name)):
                 alternative_weather_data = self._find_alternative_weather_data(
                     station_short_code,
                     scheduled_time,
                     target_column=feature_name,
                     exclude_station=ems_station
                 )
-
                 if alternative_weather_data:
                     weather_dict.update(alternative_weather_data)
+
+        # For every rolling window column still missing, search independently across the top-5.
+        # This handles cases where the station used for the instant value lacked rolling history.
+        for param in FMI_ROLLING_WINDOW_PARAMS:
+            skip_min_max = param in FMI_ROLLING_SKIP_MIN_MAX
+            skip_cumulative = param not in FMI_ROLLING_INCLUDE_CUMULATIVE
+            for window_hours in FMI_ROLLING_WINDOW_HOURS:
+                for col in get_fmi_rolling_column_names(param, window_hours, skip_min_max, skip_cumulative).values():
+                    if pd.isna(weather_dict.get(col)):
+                        alt = self._find_alternative_weather_data(
+                            station_short_code,
+                            scheduled_time,
+                            target_column=col,
+                            exclude_station=ems_station
+                        )
+                        if alt:
+                            weather_dict.update(alt)
 
         return weather_dict
     
