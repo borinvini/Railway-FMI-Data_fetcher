@@ -95,9 +95,11 @@ class FMIDataFetcher:
                         print(f"No data retrieved for {start_time_iso} - Skipping")
                         break
 
-                    # Extract station metadata only once
-                    if not station_metadata:
-                        station_metadata = obs.location_metadata
+                    # Merge station metadata from every chunk. Capturing only the
+                    # first chunk made the station table a snapshot of one hour,
+                    # so any station silent during that hour was permanently
+                    # excluded from distance matching.
+                    station_metadata.update(obs.location_metadata)
 
                     data = []
                     for timestamp, station_data in obs.data.items():
@@ -148,7 +150,7 @@ class FMIDataFetcher:
             end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
 
         all_fmi_data = []
-        ems_metadata = []  # Store station metadata (only once)
+        ems_metadata = {}  # fmisid -> station metadata row, accumulated over the range
         current_date = start_date
 
         while current_date <= end_date:
@@ -164,9 +166,11 @@ class FMIDataFetcher:
             if not daily_fmi_data.empty:
                 all_fmi_data.append(daily_fmi_data)  # Store weather data
 
-                # Store metadata only once
-                if not ems_metadata and not daily_ems_metadata.empty:
-                    ems_metadata.append(daily_ems_metadata)
+            # Accumulate station metadata independently of whether this day
+            # returned observation rows, and across every day in the range.
+            if not daily_ems_metadata.empty:
+                for station_row in daily_ems_metadata.to_dict("records"):
+                    ems_metadata[station_row["fmisid"]] = station_row
 
             # Check if the month has changed or if it's the last day in range
             if (
@@ -180,6 +184,10 @@ class FMIDataFetcher:
             current_date += timedelta(days=1)
 
         # Combine EMS metadata into a single DataFrame
-        ems_metadata_combined = pd.concat(ems_metadata, ignore_index=True) if ems_metadata else pd.DataFrame()
+        ems_metadata_combined = (
+            pd.DataFrame(list(ems_metadata.values()))
+            if ems_metadata
+            else pd.DataFrame(columns=["station_name", "fmisid", "latitude", "longitude"])
+        )
 
         return ems_metadata_combined
