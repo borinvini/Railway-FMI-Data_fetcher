@@ -123,3 +123,28 @@ def test_save_station_metadata_raises_on_empty(tmp_path):
 
     with pytest.raises(ValueError, match="Refusing to write"):
         fetcher.save_station_metadata(pd.DataFrame(), "metadata_fmi_ems_stations.csv")
+
+
+def test_saved_station_file_round_trips_the_pinned_schema(tmp_path):
+    """The file save_station_metadata writes is the contract match_train_with_ems reads.
+
+    Closes the round trip: reconcile a real frame, write it with
+    FMIDataFetcher.save_station_metadata, then read the CSV back and assert the
+    on-disk header, dtypes, and row count are exactly what was written.
+    """
+    from unittest.mock import patch
+    from src.fetchers.FMI import FMIDataFetcher, STATION_COLUMNS, reconcile_station_metadata
+
+    result = reconcile_station_metadata(_observed(), _registry())
+
+    with patch("src.fetchers.FMI.FOLDER_NAME", str(tmp_path)):
+        fetcher = FMIDataFetcher()
+
+    filename = "metadata_fmi_ems_stations.csv"
+    fetcher.save_station_metadata(result, filename)
+
+    read_back = pd.read_csv(tmp_path / filename)
+
+    assert list(read_back.columns) == STATION_COLUMNS
+    assert read_back["is_weather_station"].dtype == bool
+    assert len(read_back) == len(result)

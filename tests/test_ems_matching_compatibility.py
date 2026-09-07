@@ -28,10 +28,23 @@ def mock_haversine(coord1, coord2, unit=None):
     return R * c
 
 
-# Patch haversine module before any imports that might trigger numba
-sys.modules['haversine'] = MagicMock()
-sys.modules['haversine'].haversine = mock_haversine
-sys.modules['haversine'].Unit = MockUnit
+@pytest.fixture(autouse=True)
+def _haversine_guard(monkeypatch):
+    """Substitute a mock haversine module only when the real one can't import.
+
+    This keeps the substitution scoped to this test module (monkeypatch
+    restores sys.modules automatically at teardown) and conditional on the
+    real library genuinely failing to import, so a repaired numba
+    environment transparently switches these tests back to the real
+    haversine library instead of silently masking it forever.
+    """
+    try:
+        import haversine  # noqa: F401
+    except Exception:
+        mock_module = MagicMock()
+        mock_module.haversine = mock_haversine
+        mock_module.Unit = MockUnit
+        monkeypatch.setitem(sys.modules, "haversine", mock_module)
 
 
 def _loader(tmp_path):
