@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<wfs:FeatureCollection
+    xmlns:wfs="http://www.opengis.net/wfs/2.0"
+    xmlns:ef="http://inspire.ec.europa.eu/schemas/ef/4.0"
+    xmlns:gml="http://www.opengis.net/gml/3.2"
+    xmlns:xlink="http://www.w3.org/1999/xlink">
+  <wfs:member>
+    <ef:EnvironmentalMonitoringFacility gml:id="f-1">
+      <gml:identifier codeSpace="http://xml.fmi.fi/namespace/stationcode/fmisid">100683</gml:identifier>
+      <ef:name>Porvoo Kilpilahti satama</ef:name>
+      <ef:representativePoint>
+        <gml:Point gml:id="point-1" axisLabels="Lat Long" srsName="http://www.opengis.net/def/crs/EPSG/0/4258" srsDimension="2">
+          <gml:pos>60.303725 25.549164</gml:pos>
+        </gml:Point>
+      </ef:representativePoint>
+      <ef:belongsTo xlink:title="Automaattinen sääasema" xlink:href="https://opendata.fmi.fi/wfs/eng?networkid=121"/>
+    </ef:EnvironmentalMonitoringFacility>
+  </wfs:member>
+  <wfs:member>
+    <ef:EnvironmentalMonitoringFacility gml:id="f-2">
+      <gml:identifier codeSpace="http://xml.fmi.fi/namespace/stationcode/fmisid">100662</gml:identifier>
+      <ef:name>Helsinki Kallio 2</ef:name>
+      <ef:representativePoint>
+        <gml:Point gml:id="point-2" axisLabels="Lat Long" srsName="http://www.opengis.net/def/crs/EPSG/0/4258" srsDimension="2">
+          <gml:pos>60.187390 24.950600</gml:pos>
+        </gml:Point>
+      </ef:representativePoint>
+      <ef:belongsTo xlink:title="Kolmannen osapuolen ilmanlaadun havaintoasema" xlink:href="https://opendata.fmi.fi/wfs/eng?networkid=151"/>
+    </ef:EnvironmentalMonitoringFacility>
+  </wfs:member>
+  <wfs:member>
+    <ef:EnvironmentalMonitoringFacility gml:id="f-3">
+      <gml:identifier codeSpace="http://xml.fmi.fi/namespace/stationcode/fmisid">100539</gml:identifier>
+      <ef:name>Kemi Ajos</ef:name>
+      <ef:representativePoint>
+        <gml:Point gml:id="point-3" axisLabels="Lat Long" srsName="http://www.opengis.net/def/crs/EPSG/0/4258" srsDimension="2">
+          <gml:pos>65.673370 24.515260</gml:pos>
+        </gml:Point>
+      </ef:representativePoint>
+      <ef:belongsTo xlink:title="Mareografiasema" xlink:href="https://opendata.fmi.fi/wfs/eng?networkid=133"/>
+    </ef:EnvironmentalMonitoringFacility>
+  </wfs:member>
+  <wfs:member>
+    <ef:EnvironmentalMonitoringFacility gml:id="f-4">
+      <gml:identifier codeSpace="http://xml.fmi.fi/namespace/stationcode/fmisid">101104</gml:identifier>
+      <ef:name>Tampere Siilinkari</ef:name>
+      <ef:representativePoint>
+        <gml:Point gml:id="point-4" axisLabels="Lat Long" srsName="http://www.opengis.net/def/crs/EPSG/0/4258" srsDimension="2">
+          <gml:pos>61.514500 23.752900</gml:pos>
+        </gml:Point>
+      </ef:representativePoint>
+      <ef:belongsTo xlink:title="Sadeasema" xlink:href="https://opendata.fmi.fi/wfs/eng?networkid=124"/>
+      <ef:belongsTo xlink:title="Automaattinen sääasema" xlink:href="https://opendata.fmi.fi/wfs/eng?networkid=121"/>
+    </ef:EnvironmentalMonitoringFacility>
+  </wfs:member>
+  <wfs:member>
+    <ef:EnvironmentalMonitoringFacility gml:id="f-5">
+      <gml:identifier codeSpace="http://xml.fmi.fi/namespace/stationcode/fmisid">999999</gml:identifier>
+      <ef:name>Asema ilman sijaintia</ef:name>
+      <ef:belongsTo xlink:title="Automaattinen sääasema" xlink:href="https://opendata.fmi.fi/wfs/eng?networkid=121"/>
+    </ef:EnvironmentalMonitoringFacility>
+  </wfs:member>
+</wfs:FeatureCollection>

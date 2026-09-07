@@ -100,8 +100,21 @@ def get_fmi_rolling_column_names(param_name, window_hours, skip_min_max=False, s
 
 
 # URLs for the Finnish Meteorological Institute API
+FMI_WFS_BASE = "https://opendata.fmi.fi/wfs"
 FMI_OBSERVATIONS = "fmi::observations::weather::multipointcoverage"
 FMI_EMS = "fmi::ef::stations"
+
+# EF registry networks that count as a usable weather source.
+# The registry holds 441 facilities, most of which are not weather stations
+# (149 are third-party air quality monitors, 14 are tide gauges, 8 are
+# radioactivity monitors). Without this filter a train station could be
+# matched to a radiation monitor as its nearest "weather" source.
+FMI_WEATHER_NETWORKS = (
+    "Automaattinen sääasema",
+    "IL:n hallinnoima lentosääasema",
+    "Sääasema",
+    "Sadeasema",
+)
 
 # URLs for the Finnish Railway API
 FIN_RAILWAY_BASE_URL = "https://rata.digitraffic.fi/api/v1"
@@ -125,6 +138,7 @@ CSV_ALL_TRAINS = "all_trains_data.csv"
 
 CSV_FMI = "fmi_weather_observations.csv"
 CSV_FMI_EMS = "metadata_fmi_ems_stations.csv"
+CSV_FMI_EF_REGISTRY = "metadata_fmi_ef_registry.csv"
 CSV_CLOSEST_EMS_TRAIN = "metadata_closest_ems_to_train_stations.csv"
 CSV_TOP5_CLOSEST_EMS_TRAIN = "metadata_top5_closest_ems.csv"
 CSV_MATCHED_DATA = "matched_data.csv"
