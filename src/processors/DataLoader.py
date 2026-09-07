@@ -804,6 +804,18 @@ class DataLoader:
         self.merged_metadata = pd.read_csv(train_stations_path)
         ems_stations = pd.read_csv(ems_stations_path)
 
+        # Defensive: never let a non-weather facility (tide gauge, air quality
+        # monitor, radiation monitor) become a train station's nearest "weather"
+        # source. The column is absent in files written before the EF registry
+        # change, so its absence means "all rows are weather stations".
+        if "is_weather_station" in ems_stations.columns:
+            before = len(ems_stations)
+            ems_stations = ems_stations[
+                ems_stations["is_weather_station"].fillna(True).astype(bool)
+            ]
+            if len(ems_stations) < before:
+                print(f"ℹ️ Excluded {before - len(ems_stations)} non-weather stations from matching.")
+
         # Drop unnecessary columns from train stations
         self.merged_metadata = self.merged_metadata.drop(
             columns=["type", "stationUICCode", "countryCode"],
