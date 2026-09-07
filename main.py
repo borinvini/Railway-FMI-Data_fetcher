@@ -1,9 +1,10 @@
 import os
 from src.processors.DataLoader import DataLoader
 from src.fetchers.Railway import RailwayDataFetcher
-from src.fetchers.FMI import FMIDataFetcher
+from src.fetchers.FMI import FMIDataFetcher, reconcile_station_metadata
+from src.fetchers.FMIStations import FMIStationRegistry
 
-from config.const import CSV_ALL_TRAINS, CSV_FMI, CSV_FMI_EMS, CSV_TRAIN_CATEGORIES, CSV_TRAIN_CAUSES, CSV_TRAIN_CAUSES_DETAILED, CSV_TRAIN_STATIONS, CSV_TRAIN_THIRD_CAUSES, END_DATE, FMI_BBOX, FOLDER_NAME, PARQUET_ALL_TRAINS_FLAT, PARQUET_FMI, PARQUET_MATCHED_DATA_FLAT, START_DATE
+from config.const import CSV_ALL_TRAINS, CSV_FMI, CSV_FMI_EF_REGISTRY, CSV_FMI_EMS, CSV_TRAIN_CATEGORIES, CSV_TRAIN_CAUSES, CSV_TRAIN_CAUSES_DETAILED, CSV_TRAIN_STATIONS, CSV_TRAIN_THIRD_CAUSES, END_DATE, FMI_BBOX, FOLDER_NAME, PARQUET_ALL_TRAINS_FLAT, PARQUET_FMI, PARQUET_MATCHED_DATA_FLAT, START_DATE
 
 # Create data folder if it doesn't exist
 os.makedirs(FOLDER_NAME, exist_ok=True)
@@ -41,9 +42,16 @@ if DATA_FETCH:
     # Fetch train data for a specific interval
     railway_fetcher.fetch_trains_by_interval(START_DATE, END_DATE, stations_metadata)
 
+    # Fetch the EF station catalogue first, so a registry outage surfaces before
+    # the multi-hour observation download rather than after it.
+    ef_registry = FMIStationRegistry().fetch_registry()
+    if not ef_registry.empty:
+        fmi_fetcher.save_to_csv(ef_registry, CSV_FMI_EF_REGISTRY)
+
     # Fetch data for the specified date range
-    ems_data = fmi_fetcher.fetch_fmi_by_interval(FMI_BBOX, START_DATE, END_DATE)
-    fmi_fetcher.save_to_csv(ems_data, CSV_FMI_EMS)
+    observed_stations = fmi_fetcher.fetch_fmi_by_interval(FMI_BBOX, START_DATE, END_DATE)
+    ems_data = reconcile_station_metadata(observed_stations, ef_registry)
+    fmi_fetcher.save_station_metadata(ems_data, CSV_FMI_EMS)
 else:
     try:
         data_loader = DataLoader()
