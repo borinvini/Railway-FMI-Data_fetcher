@@ -6,6 +6,85 @@ from fmiopendata.wfs import download_stored_query
 
 from config.const import FMI_OBSERVATIONS, FMI_EMS, CSV_FMI, CSV_FMI_EMS, FOLDER_NAME
 
+# Pinned schema for metadata_fmi_ems_stations.csv. The first four columns are the
+# file's published shape and must keep this order; the remaining four are additive
+# provenance. Written once from a single DataFrame, never appended chunk by chunk.
+STATION_COLUMNS = [
+    "station_name", "fmisid", "latitude", "longitude",
+    "networks", "is_weather_station", "in_ef_registry", "coord_source",
+]
+
+
+def reconcile_station_metadata(observed, ef_registry):
+    """
+    Enriches observation-derived station metadata with the EF registry.
+
+    The observed table is the spine: this is a left join, so registry entries never
+    add or remove stations. Station discovery stays with the observation feed so that
+    every match candidate provably has data, while the registry supplies authoritative
+    coordinates, station typing, and absent-versus-silent provenance.
+
+    Args:
+        observed (pd.DataFrame): Stations seen in the observation feed, with columns
+            station_name, fmisid, latitude, longitude.
+        ef_registry (pd.DataFrame): EF catalogue from FMIStationRegistry.fetch_registry().
+            May be empty if the registry was unreachable.
+
+    Returns:
+        pd.DataFrame: Weather stations with columns STATION_COLUMNS.
+
+    Raises:
+        ValueError: If no station metadata was collected at all.
+    """
+    if observed is None or observed.empty:
+        raise ValueError(
+            "No EMS station metadata was collected from the observation feed. "
+            "Refusing to write an empty station table, which would silently leave "
+            "a stale metadata_fmi_ems_stations.csv in place from an earlier run "
+            "with a different date range or bounding box."
+        )
+
+    stations = observed.copy()
+
+    if ef_registry is None or ef_registry.empty:
+        print("⚠️ EF registry unavailable — station typing and coordinates come from observations only.")
+        stations["networks"] = pd.NA
+        stations["is_weather_station"] = True
+        stations["in_ef_registry"] = pd.NA
+        stations["coord_source"] = "observation"
+        return stations[STATION_COLUMNS].reset_index(drop=True)
+
+    registry = ef_registry[["fmisid", "latitude", "longitude", "networks", "is_weather_station"]]
+    merged = stations.merge(registry, on="fmisid", how="left", suffixes=("", "_ef"))
+
+    merged["in_ef_registry"] = merged["networks"].notna()
+    merged["coord_source"] = merged["in_ef_registry"].map({True: "ef", False: "observation"})
+
+    # The registry is authoritative for station position where it has one.
+    for axis in ("latitude", "longitude"):
+        merged[axis] = merged[f"{axis}_ef"].combine_first(merged[axis])
+
+    # Stations absent from the registry are demonstrably producing weather
+    # observations, so treat catalogue absence as a registry gap, not as evidence
+    # against the station.
+    merged["is_weather_station"] = (
+        merged["is_weather_station"].astype("boolean").fillna(True).astype(bool)
+    )
+
+    excluded = merged[~merged["is_weather_station"]]
+    for _, station in excluded.iterrows():
+        print(f"⚠️ Excluding non-weather station '{station['station_name']}' ({station['networks']}).")
+
+    absent = merged[~merged["in_ef_registry"]]
+    if not absent.empty:
+        names = ", ".join(sorted(absent["station_name"].astype(str)))
+        print(f"ℹ️ {len(absent)} observed stations absent from the EF registry: {names}")
+
+    kept = merged[merged["is_weather_station"]]
+    print(f"✅ Station table: {len(kept)} stations ({int(kept['in_ef_registry'].sum())} registry-confirmed).")
+    return kept[STATION_COLUMNS].reset_index(drop=True)
+
+
 class FMIDataFetcher:
     def __init__(self):
         """
@@ -32,6 +111,33 @@ class FMIDataFetcher:
             print(f"Data saved to {filepath}")
         else:
             print("No data to save.")
+
+    def save_station_metadata(self, df, filename):
+        """
+        Saves the station metadata table, refusing to write an empty one.
+
+        save_to_csv treats an empty frame as a no-op and returns, which leaves any
+        previous run's file untouched. For station metadata that is a silent
+        correctness failure: matching would proceed against a station table built
+        from a different date range or bounding box.
+
+        Args:
+            df (pd.DataFrame): The station table to save.
+            filename (str): Name of the CSV file.
+
+        Raises:
+            ValueError: If df is empty.
+        """
+        if df is None or df.empty:
+            raise ValueError(
+                f"Refusing to write an empty station table to '{filename}'. "
+                "An earlier run's file would otherwise remain in place and be "
+                "silently used for matching."
+            )
+
+        filepath = os.path.join(self.output_folder, filename)
+        df.to_csv(filepath, index=False, encoding="utf-8")
+        print(f"Station metadata saved to {filepath} ({len(df)} stations)")
 
     def save_monthly_data_to_csv(self, df, base_filename, year, month):
         """
