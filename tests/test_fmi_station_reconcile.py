@@ -102,6 +102,17 @@ def test_reconcile_degrades_gracefully_without_registry():
     assert result["latitude"].tolist() == [60.30373, 61.47893]
 
 
+def test_reconcile_raises_on_duplicate_registry_fmisid():
+    """A duplicated fmisid must stop the run, not silently fan out the join."""
+    from src.fetchers.FMI import reconcile_station_metadata
+
+    registry = _registry()
+    duplicated = pd.concat([registry, registry.iloc[[0]]], ignore_index=True)
+
+    with pytest.raises(ValueError, match="duplicate fmisid"):
+        reconcile_station_metadata(_observed(), duplicated)
+
+
 def test_save_station_metadata_raises_on_empty(tmp_path):
     """An empty table must never silently leave a stale CSV in place."""
     from unittest.mock import patch

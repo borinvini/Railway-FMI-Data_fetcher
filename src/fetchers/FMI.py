@@ -57,6 +57,18 @@ def reconcile_station_metadata(observed, ef_registry):
     registry = ef_registry[["fmisid", "latitude", "longitude", "networks", "is_weather_station"]]
     merged = stations.merge(registry, on="fmisid", how="left", suffixes=("", "_ef"))
 
+    # A duplicate fmisid in the registry would fan out the left join and silently
+    # duplicate a station in the matching table. gml:identifier is unique per
+    # facility, so a duplicate means the response is malformed — stop rather than
+    # quietly dedupe and hide it.
+    if len(merged) != len(stations):
+        duplicated = registry.loc[registry["fmisid"].duplicated(), "fmisid"].tolist()
+        raise ValueError(
+            f"EF registry contains duplicate fmisid values {duplicated}, which fanned "
+            f"out the station join from {len(stations)} to {len(merged)} rows. "
+            "Refusing to write a station table with duplicated stations."
+        )
+
     merged["in_ef_registry"] = merged["networks"].notna()
     merged["coord_source"] = merged["in_ef_registry"].map({True: "ef", False: "observation"})
 
