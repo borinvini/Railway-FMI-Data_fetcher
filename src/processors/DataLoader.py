@@ -55,7 +55,6 @@ class DataLoader:
         self.train_files = None
         self.weather_files = None
         self.merged_metadata: pd.DataFrame = pd.DataFrame()  
-        self.ems_metadata: pd.DataFrame = pd.DataFrame()
         self.ems_weather_dict: dict = {}                     # Store EMS station metadata for snow depth search
         self.top5_ems_dict: dict = {}                        # Precomputed top-5 closest EMS per train station
 
@@ -1211,15 +1210,6 @@ class DataLoader:
         if self.merged_metadata.empty:
             raise ValueError("merged_metadata is empty. Call match_train_with_ems() first.")
         
-        # Load EMS metadata for snow depth alternative search
-        ems_stations_path = os.path.join(self.data_folder, CSV_FMI_EMS)
-        if os.path.exists(ems_stations_path):
-            self.ems_metadata = pd.read_csv(ems_stations_path)
-            print(f"✅ Loaded EMS metadata with {len(self.ems_metadata)} stations for snow depth search.")
-        else:
-            print(f"⚠️ EMS metadata file not found. Snow depth alternative search will be disabled.")
-            self.ems_metadata = pd.DataFrame()
-
         # Load precomputed top-5 closest EMS stations per train station
         top5_path = os.path.join(self.data_folder, CSV_TOPN_CLOSEST_EMS_TRAIN)
         if os.path.exists(top5_path):
@@ -1408,25 +1398,16 @@ class DataLoader:
                                 train_track["differenceInMinutes_eachStation_offset"] = each_station_offset_value
 
                     if station_short_code and scheduled_time:
-                        closest_ems_row = self.merged_metadata.loc[
-                            self.merged_metadata["train_station_short_code"] == station_short_code
-                        ]
+                        weather_data_point = self._find_closest_weather(
+                            scheduled_time,
+                            station_short_code
+                        )
 
-                        if not closest_ems_row.empty:
-                            closest_ems_station = closest_ems_row.iloc[0]["closest_ems_station"]
+                        if not weather_data_point:
+                            print(f"⚠️ No weather data available for {station_short_code} at {scheduled_time}")
 
-                            # Call private method to find closest weather with snow depth alternative
-                            weather_data_point = self._find_closest_weather(
-                                closest_ems_station,
-                                scheduled_time,
-                                station_short_code
-                            )
-
-                            if not weather_data_point:
-                                print(f"⚠️ No weather data available for {closest_ems_station} at {scheduled_time}")
-
-                            # Merge weather data into the stop dictionary
-                            train_track["weather_observations"] = weather_data_point
+                        # Merge weather data into the stop dictionary
+                        train_track["weather_observations"] = weather_data_point
 
                 # Reassign timetable back to the DataFrame row
                 filtered_train_data.at[idx, "timeTableRows"] = timetable
@@ -1566,48 +1547,75 @@ class DataLoader:
         # No alternative weather data found
         return {}
 
-    def _find_closest_weather(self, ems_station, scheduled_time, station_short_code):
+    def _find_closest_weather(self, scheduled_time, station_short_code):
         """
-        Finds the closest weather observation and alternative weather data for multiple features if needed.
+        Finds weather for one stop, resolving station liveness against this month.
+
+        The candidate table is pure geography and says nothing about whether a
+        station reported in the month being merged. This walks ranks 1..N and takes
+        the first candidate that actually has data, so a station commissioned in a
+        later year no longer blocks the stops nearest to it.
+
+        closest_ems names the station that supplied the instant block. Individual
+        columns may still come from other ranks via the per-feature fallbacks below,
+        which is long-standing behaviour.
 
         Parameters:
-            ems_station (str): The closest EMS station name.
-            scheduled_time (str): The scheduled time in ISO format.
-            station_short_code (str): The train station short code for top-5 EMS lookup.
+            scheduled_time (str): Scheduled time in ISO format.
+            station_short_code (str): Train station short code, keying the candidate table.
 
         Returns:
-            dict: A dictionary containing the matched weather observations and alternative weather data for each feature if applicable.
+            dict: Weather observations plus closest_ems and closest_ems_distance_km,
+                  or {} when no candidate had data for this timestamp.
         """
         try:
-            # Convert scheduled time to datetime
             scheduled_time_dt = datetime.strptime(scheduled_time, "%Y-%m-%dT%H:%M:%S.%fZ")
         except ValueError as e:
             print(f"🚨 Invalid scheduled time format: {e}")
             return {}
 
-        if ems_station not in self.ems_weather_dict:
-            print(f"⚠️ Primary EMS '{ems_station}' not in weather data — falling back to top-5 alternatives for all features.")
-            weather_dict = {}
+        top_row = self.top5_ems_dict.get(station_short_code)
+        if top_row is None:
+            return {}
+
+        scheduled_time_np = np.datetime64(scheduled_time_dt)
+
+        primary_name = None
+        primary_distance = None
+        for rank in range(1, TOP_N_CLOSEST_EMS + 1):
+            candidate = top_row.get(f"ems_{rank}_station")
+            if candidate is None or pd.isna(candidate):
+                continue
+            if candidate in self.ems_weather_dict:
+                primary_name = candidate
+                primary_distance = top_row.get(f"ems_{rank}_distance_km")
+                break
+
+        if primary_name is None:
+            return {}
+
+        station_weather_df = self.ems_weather_dict[primary_name]
+        timestamps = station_weather_df["timestamp"].to_numpy(dtype="datetime64[ns]")
+
+        idx = np.searchsorted(timestamps, scheduled_time_np)
+        if idx == 0:
+            closest_idx = 0
+        elif idx >= len(timestamps):
+            closest_idx = len(timestamps) - 1
         else:
-            station_weather_df = self.ems_weather_dict[ems_station]
+            before = abs(timestamps[idx - 1] - scheduled_time_np)
+            after = abs(timestamps[idx] - scheduled_time_np)
+            closest_idx = idx if after < before else idx - 1
 
-            timestamps = station_weather_df["timestamp"].to_numpy(dtype="datetime64[ns]")
-            scheduled_time_np = np.datetime64(scheduled_time_dt)
-
-            idx = np.searchsorted(timestamps, scheduled_time_np)
-            if idx == 0:
-                closest_idx = 0
-            elif idx >= len(timestamps):
-                closest_idx = len(timestamps) - 1
-            else:
-                before = abs(timestamps[idx - 1] - scheduled_time_np)
-                after = abs(timestamps[idx] - scheduled_time_np)
-                closest_idx = idx if after < before else idx - 1
-
-            closest_row = station_weather_df.iloc[closest_idx]
-            weather_dict = closest_row.drop(["station_name"]).to_dict()
-            weather_dict = {"closest_ems": closest_row["station_name"], **weather_dict}
-            weather_dict.pop("timestamp", None)
+        closest_row = station_weather_df.iloc[closest_idx]
+        weather_dict = closest_row.drop(["station_name"]).to_dict()
+        weather_dict.pop("timestamp", None)
+        weather_dict = {
+            "closest_ems": primary_name,
+            "closest_ems_distance_km": primary_distance,
+            **weather_dict,
+        }
+        ems_station = primary_name
 
         # For every instant weather feature, fall back to the top-5 alternatives if the value is missing.
         # _find_alternative_weather_data also fills rolling window columns from the same station as a
