@@ -851,6 +851,18 @@ class DataLoader:
             if len(ems_stations) < before:
                 print(f"ℹ️ Excluded {before - len(ems_stations)} non-weather stations from matching.")
 
+        # FMI_BBOX covers Finland only, so a non-FI station can never have a
+        # weather observation. Matching them anyway pulled readings from hundreds
+        # of kilometres inside Finland and presented them as the local weather.
+        if "countryCode" in self.merged_metadata.columns:
+            foreign = self.merged_metadata[self.merged_metadata["countryCode"] != "FI"]
+            if not foreign.empty:
+                names = ", ".join(sorted(foreign["stationName"].astype(str)))
+                print(f"ℹ️ Excluding {len(foreign)} non-FI train stations from EMS matching: {names}")
+            self.merged_metadata = self.merged_metadata[
+                self.merged_metadata["countryCode"] == "FI"
+            ].copy()
+
         # Drop unnecessary columns from train stations
         self.merged_metadata = self.merged_metadata.drop(
             columns=["type", "stationUICCode", "countryCode"],

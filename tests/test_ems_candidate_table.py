@@ -93,3 +93,40 @@ def test_closest_ems_returns_nan_when_nothing_in_radius():
     assert lat is None
     assert lon is None
     assert pd.isna(dist)
+
+
+def test_non_finnish_train_stations_are_excluded(tmp_path):
+    from unittest.mock import patch
+    from src.processors.DataLoader import DataLoader
+
+    # DataLoader.__init__ calls _check_data_folder, which raises FileNotFoundError
+    # unless the folder holds train AND weather files whose date ranges match.
+    # These two stubs exist only to get past that gate.
+    pd.DataFrame({"trainNumber": [1]}).to_csv(
+        tmp_path / "all_trains_data_2018_01.csv", index=False)
+    pd.DataFrame({"timestamp": ["2018-01-01T00:00:00Z"], "station_name": ["X"]}).to_csv(
+        tmp_path / "fmi_weather_observations_2018_01.csv", index=False)
+
+    pd.DataFrame({
+        "stationName": ["Helsinki asema", "Tver"],
+        "stationShortCode": ["HKI", "TVE"],
+        "latitude": [60.171356, 56.835200],
+        "longitude": [24.941444, 35.892800],
+        "countryCode": ["FI", "RU"],
+        "type": ["STATION", "STATION"],
+        "stationUICCode": [1, 2],
+        "passengerTraffic": [True, True],
+    }).to_csv(tmp_path / "metadata_train_stations.csv", index=False)
+
+    pd.DataFrame({
+        "station_name": ["Helsinki Kaisaniemi"],
+        "fmisid": [100971],
+        "latitude": [60.17523],
+        "longitude": [24.94459],
+    }).to_csv(tmp_path / "metadata_fmi_ems_stations.csv", index=False)
+
+    with patch("src.processors.DataLoader.FOLDER_NAME", str(tmp_path)):
+        loader = DataLoader()
+        result = loader.match_train_with_ems()
+
+    assert set(result["train_station_short_code"]) == {"HKI"}
