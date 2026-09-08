@@ -717,6 +717,27 @@ class DataLoader:
         print(f"{'='*60}\n")
 
     @staticmethod
+    def _drop_nan_coord_rows(ems_stations):
+        """
+        Drop pool rows with a missing latitude or longitude.
+
+        A NaN coordinate propagates through the haversine distance as NaN, and
+        both np.argmin and the `> ALTERNATIVE_WEATHER_RADIUS_KM` guard treat NaN
+        as the smallest/never-too-far value — so an unfiltered NaN row would
+        silently win as rank-1 for every train station. This was unreachable
+        before this branch (station discovery came from the observation feed);
+        it is reachable now because save_station_metadata unions an arbitrary
+        pre-existing on-disk CSV into the pool.
+
+        Returns:
+            pd.DataFrame: ems_stations with NaN-coordinate rows removed. May be
+                          empty, which callers already handle as "no candidates".
+        """
+        if ems_stations.empty:
+            return ems_stations
+        return ems_stations.dropna(subset=["latitude", "longitude"])
+
+    @staticmethod
     def _haversine_km(train_lat, train_long, ems_stations):
         """
         Great-circle distance in km from one train station to every EMS station.
@@ -756,6 +777,8 @@ class DataLoader:
             tuple: (station name, latitude, longitude, distance_km), or
                    (None, None, None, nan) when nothing is inside the radius.
         """
+        ems_stations = DataLoader._drop_nan_coord_rows(ems_stations)
+
         if ems_stations.empty:
             return None, None, None, float("nan")
 
@@ -800,6 +823,8 @@ class DataLoader:
             result[f"ems_{rank}_lat"] = np.nan
             result[f"ems_{rank}_long"] = np.nan
             result[f"ems_{rank}_distance_km"] = np.nan
+
+        ems_stations = DataLoader._drop_nan_coord_rows(ems_stations)
 
         if ems_stations.empty:
             return pd.Series(result)
@@ -929,7 +954,8 @@ class DataLoader:
             matched_filepath = os.path.join(self.output_folder, matched_filename)
 
             if os.path.exists(matched_filepath):
-                print(f"  ℹ️ {matched_filename} already exists. Skipping.")
+                print(f"  ℹ️ {matched_filename} already exists — keeping it. "
+                      f"Move it aside to regenerate with the current station mapping.")
                 continue
 
             train_file = train_files_by_month[month]

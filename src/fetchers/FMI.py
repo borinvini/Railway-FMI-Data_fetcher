@@ -193,6 +193,14 @@ class FMIDataFetcher:
                 # observation feed alone, so every station in them was observed
                 # by construction.
                 previous["observed_in_run"] = True
+            # A pool file predating the EF-registry work also lacks
+            # `is_weather_station` and `coord_source`; those rows join with NaN
+            # here and are not backfilled. This is safe: match_train_with_ems
+            # applies `.fillna(True)` to `is_weather_station` before filtering, so
+            # a missing value is treated as "is a weather station" (matching the
+            # pre-registry world where every pooled station was one), and a NaN
+            # `coord_source` only loses the registry-coordinate tie-break below —
+            # it never causes a row to be dropped or misjoined.
             combined = pd.concat([previous, df], ignore_index=True)
 
             # A station observed in any earlier run stays observed; the column means

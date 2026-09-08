@@ -130,3 +130,71 @@ def test_non_finnish_train_stations_are_excluded(tmp_path):
         result = loader.match_train_with_ems()
 
     assert set(result["train_station_short_code"]) == {"HKI"}
+
+
+def _nan_and_valid_pool():
+    """One NaN-coordinate row plus one valid row close to the query point."""
+    return pd.DataFrame({
+        "station_name": ["NaNStation", "Valid"],
+        "fmisid": [1, 2],
+        "latitude": [float("nan"), 60.02],
+        "longitude": [24.0, 24.0],
+    })
+
+
+def _all_nan_pool():
+    """Every row in the pool has a missing latitude or longitude."""
+    return pd.DataFrame({
+        "station_name": ["NaNLat", "NaNLong"],
+        "fmisid": [1, 2],
+        "latitude": [float("nan"), 60.0],
+        "longitude": [24.0, float("nan")],
+    })
+
+
+def test_closest_ems_skips_nan_coordinate_row():
+    from src.processors.DataLoader import DataLoader
+
+    name, lat, lon, dist = DataLoader._find_closest_ems(
+        None, 60.0, 24.0, _nan_and_valid_pool()
+    )
+
+    assert name == "Valid"
+    assert not pd.isna(dist)
+
+
+def test_closest_ems_all_nan_pool_behaves_as_empty():
+    from src.processors.DataLoader import DataLoader
+
+    name, lat, lon, dist = DataLoader._find_closest_ems(
+        None, 60.0, 24.0, _all_nan_pool()
+    )
+
+    assert name is None
+    assert lat is None
+    assert lon is None
+    assert pd.isna(dist)
+
+
+def test_top_n_closest_ems_skips_nan_coordinate_row():
+    from config.const import TOP_N_CLOSEST_EMS
+    from src.processors.DataLoader import DataLoader
+
+    result = DataLoader._find_top_n_closest_ems(
+        None, 60.0, 24.0, _nan_and_valid_pool(), n=TOP_N_CLOSEST_EMS
+    )
+
+    assert result["ems_1_station"] == "Valid"
+    assert pd.isna(result["ems_2_station"])
+
+
+def test_top_n_closest_ems_all_nan_pool_behaves_as_empty():
+    from config.const import TOP_N_CLOSEST_EMS
+    from src.processors.DataLoader import DataLoader
+
+    result = DataLoader._find_top_n_closest_ems(
+        None, 60.0, 24.0, _all_nan_pool(), n=TOP_N_CLOSEST_EMS
+    )
+
+    assert len(result) == TOP_N_CLOSEST_EMS * 4
+    assert result.isna().all()
