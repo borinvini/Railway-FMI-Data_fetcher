@@ -47,3 +47,6 @@ docs/
 
 # Ignore Git-specific files
 .git/
+
+# SDD workspace (ledger, briefs, review packages)
+.superpowers/
