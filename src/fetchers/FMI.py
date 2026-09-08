@@ -7,22 +7,29 @@ from fmiopendata.wfs import download_stored_query
 from config.const import FMI_OBSERVATIONS, FMI_EMS, CSV_FMI, CSV_FMI_EMS, FOLDER_NAME
 
 # Pinned schema for metadata_fmi_ems_stations.csv. The first four columns are the
-# file's published shape and must keep this order; the remaining four are additive
+# file's published shape and must keep this order; the remaining five are additive
 # provenance. Written once from a single DataFrame, never appended chunk by chunk.
 STATION_COLUMNS = [
     "station_name", "fmisid", "latitude", "longitude",
     "networks", "is_weather_station", "in_ef_registry", "coord_source",
+    "observed_in_run",
 ]
 
 
 def reconcile_station_metadata(observed, ef_registry):
     """
-    Enriches observation-derived station metadata with the EF registry.
+    Builds the EMS candidate pool from the observation feed and the EF registry.
 
-    The observed table is the spine: this is a left join, so registry entries never
-    add or remove stations. Station discovery stays with the observation feed so that
-    every match candidate provably has data, while the registry supplies authoritative
-    coordinates, station typing, and absent-versus-silent provenance.
+    This is an outer union: the pool is every EF weather station plus every station
+    seen in observations, whether or not the two overlap. The pool is geography, not
+    evidence of data — a station commissioned in 2024 belongs in it even when merging
+    2018, because merge-time liveness resolution walks the candidate ranks and skips
+    anything silent for the month.
+
+    Non-weather facilities from the registry (tide gauges, air quality monitors,
+    radiation monitors) are excluded: 187 of the registry's 441 entries. Stations the
+    registry omits but observations show are kept, because catalogue absence is a
+    registry gap, not evidence against a station that is demonstrably reporting.
 
     Args:
         observed (pd.DataFrame): Stations seen in the observation feed, with columns
@@ -34,7 +41,8 @@ def reconcile_station_metadata(observed, ef_registry):
         pd.DataFrame: Weather stations with columns STATION_COLUMNS.
 
     Raises:
-        ValueError: If no station metadata was collected at all.
+        ValueError: If no station metadata was collected at all, or if the registry
+            contains a duplicate fmisid.
     """
     if observed is None or observed.empty:
         raise ValueError(
@@ -52,29 +60,33 @@ def reconcile_station_metadata(observed, ef_registry):
         stations["is_weather_station"] = True
         stations["in_ef_registry"] = pd.NA
         stations["coord_source"] = "observation"
+        stations["observed_in_run"] = True
         return stations[STATION_COLUMNS].reset_index(drop=True)
 
-    registry = ef_registry[["fmisid", "latitude", "longitude", "networks", "is_weather_station"]]
-    merged = stations.merge(registry, on="fmisid", how="left", suffixes=("", "_ef"))
+    registry = ef_registry[["fmisid", "station_name", "latitude", "longitude", "networks", "is_weather_station"]]
 
-    # A duplicate fmisid in the registry would fan out the left join and silently
+    # A duplicate fmisid in the registry would fan out the join and silently
     # duplicate a station in the matching table. gml:identifier is unique per
     # facility, so a duplicate means the response is malformed — stop rather than
     # quietly dedupe and hide it.
-    if len(merged) != len(stations):
+    if registry["fmisid"].duplicated().any():
         duplicated = registry.loc[registry["fmisid"].duplicated(), "fmisid"].tolist()
         raise ValueError(
-            f"EF registry contains duplicate fmisid values {duplicated}, which fanned "
-            f"out the station join from {len(stations)} to {len(merged)} rows. "
+            f"EF registry contains duplicate fmisid values {duplicated}. "
             "Refusing to write a station table with duplicated stations."
         )
 
-    merged["in_ef_registry"] = merged["networks"].notna()
+    merged = stations.merge(registry, on="fmisid", how="outer", suffixes=("", "_ef"), indicator=True)
+
+    merged["observed_in_run"] = merged["_merge"].isin(["left_only", "both"])
+    merged["in_ef_registry"] = merged["_merge"].isin(["right_only", "both"])
     merged["coord_source"] = merged["in_ef_registry"].map({True: "ef", False: "observation"})
 
-    # The registry is authoritative for station position where it has one.
+    # The registry is authoritative for station position where it has one; a
+    # registry-only station has no observation coordinate to fall back to.
     for axis in ("latitude", "longitude"):
         merged[axis] = merged[f"{axis}_ef"].combine_first(merged[axis])
+    merged["station_name"] = merged["station_name_ef"].combine_first(merged["station_name"])
 
     # Stations absent from the registry are demonstrably producing weather
     # observations, so treat catalogue absence as a registry gap, not as evidence
@@ -87,13 +99,17 @@ def reconcile_station_metadata(observed, ef_registry):
     for _, station in excluded.iterrows():
         print(f"⚠️ Excluding non-weather station '{station['station_name']}' ({station['networks']}).")
 
-    absent = merged[~merged["in_ef_registry"]]
+    absent = merged[merged["is_weather_station"] & ~merged["in_ef_registry"]]
     if not absent.empty:
         names = ", ".join(sorted(absent["station_name"].astype(str)))
         print(f"ℹ️ {len(absent)} observed stations absent from the EF registry: {names}")
 
     kept = merged[merged["is_weather_station"]]
-    print(f"✅ Station table: {len(kept)} stations ({int(kept['in_ef_registry'].sum())} registry-confirmed).")
+    print(
+        f"✅ Station pool: {len(kept)} stations "
+        f"({int(kept['in_ef_registry'].sum())} registry-confirmed, "
+        f"{int(kept['observed_in_run'].sum())} observed this run)."
+    )
     return kept[STATION_COLUMNS].reset_index(drop=True)
 
 
