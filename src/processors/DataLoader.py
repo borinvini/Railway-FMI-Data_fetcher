@@ -8,7 +8,7 @@ import pandas as pd
 from glob import glob
 from haversine import haversine, Unit
 from collections import Counter
-from config.const import CSV_ALL_TRAINS, CSV_ALL_TRAINS_FLAT, CSV_CLOSEST_EMS_TRAIN, CSV_TOP5_CLOSEST_EMS_TRAIN, CSV_DELAY_TABLE_EACH_STATION, CSV_DELAY_TABLE_OFFSET, CSV_DELAY_TABLE_ORIGINAL, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_MATCHED_DATA_FLAT, CSV_TRAIN_STATIONS, DELAY_LONG_DISTANCE_TRAINS, FILTER_BY_ROUTE, FILTER_BY_TRAIN_CATEGORY, FMI_INSTANT_PARAMS, FMI_ROLLING_WINDOW_HOURS, FMI_ROLLING_WINDOW_PARAMS, FMI_ROLLING_SKIP_MIN_MAX, FMI_ROLLING_INCLUDE_CUMULATIVE, FOLDER_NAME, MANDATORY_STATIONS, PARQUET_ALL_TRAINS_FLAT, PARQUET_FMI, PARQUET_MATCHED_DATA_FLAT, TRAIN_CATEGORY_FILTER, get_fmi_rolling_column_names
+from config.const import CSV_ALL_TRAINS, CSV_ALL_TRAINS_FLAT, CSV_CLOSEST_EMS_TRAIN, CSV_TOPN_CLOSEST_EMS_TRAIN, CSV_DELAY_TABLE_EACH_STATION, CSV_DELAY_TABLE_OFFSET, CSV_DELAY_TABLE_ORIGINAL, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_MATCHED_DATA_FLAT, CSV_TRAIN_STATIONS, DELAY_LONG_DISTANCE_TRAINS, FILTER_BY_ROUTE, FILTER_BY_TRAIN_CATEGORY, FMI_INSTANT_PARAMS, FMI_ROLLING_WINDOW_HOURS, FMI_ROLLING_WINDOW_PARAMS, FMI_ROLLING_SKIP_MIN_MAX, FMI_ROLLING_INCLUDE_CUMULATIVE, FOLDER_NAME, MANDATORY_STATIONS, PARQUET_ALL_TRAINS_FLAT, PARQUET_FMI, PARQUET_MATCHED_DATA_FLAT, TOP_N_CLOSEST_EMS, TRAIN_CATEGORY_FILTER, get_fmi_rolling_column_names
 from config.const import send_email
 
 class DataLoader:
@@ -750,7 +750,7 @@ class DataLoader:
 
         return closest_ems, closest_lat, closest_long, min_distance
 
-    def _find_top_n_closest_ems(self, train_lat, train_long, ems_stations, n=5):
+    def _find_top_n_closest_ems(self, train_lat, train_long, ems_stations, n=TOP_N_CLOSEST_EMS):
         """
         Finds the top N closest EMS stations based on Haversine distance.
 
@@ -847,14 +847,14 @@ class DataLoader:
         # Build top-5 closest EMS stations per train station (wide format)
         top5_columns = self.merged_metadata[["train_station_name", "train_station_short_code", "train_lat", "train_long"]].copy()
         top5_ems = self.merged_metadata.apply(
-            lambda row: self._find_top_n_closest_ems(row["train_lat"], row["train_long"], ems_stations, n=5),
+            lambda row: self._find_top_n_closest_ems(row["train_lat"], row["train_long"], ems_stations, n=TOP_N_CLOSEST_EMS),
             axis=1
         )
         top5_metadata = pd.concat([top5_columns, top5_ems], axis=1)
 
         print("✅ Top 5 closest EMS stations matched with train stations.")
 
-        self.save_to_csv(top5_metadata, CSV_TOP5_CLOSEST_EMS_TRAIN)
+        self.save_to_csv(top5_metadata, CSV_TOPN_CLOSEST_EMS_TRAIN)
 
         return self.merged_metadata
 
@@ -1174,7 +1174,7 @@ class DataLoader:
             self.ems_metadata = pd.DataFrame()
 
         # Load precomputed top-5 closest EMS stations per train station
-        top5_path = os.path.join(self.data_folder, CSV_TOP5_CLOSEST_EMS_TRAIN)
+        top5_path = os.path.join(self.data_folder, CSV_TOPN_CLOSEST_EMS_TRAIN)
         if os.path.exists(top5_path):
             top5_df = pd.read_csv(top5_path)
             self.top5_ems_dict = {
@@ -1471,7 +1471,7 @@ class DataLoader:
                 columns_to_extract.extend(rolling_names.values())
 
         # Iterate through precomputed top-5 closest EMS stations (already sorted by distance)
-        for rank in range(1, 6):
+        for rank in range(1, TOP_N_CLOSEST_EMS + 1):
             station_name = top5_row.get(f"ems_{rank}_station")
 
             if pd.isna(station_name):

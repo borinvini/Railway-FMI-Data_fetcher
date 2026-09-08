@@ -34,6 +34,7 @@ FMI_BBOX = "18,55,35,75" # Bounding box for Finland
 
 # Alternative weather data search parameters
 ALTERNATIVE_WEATHER_RADIUS_KM = 50  # Maximum radius in kilometers for alternative weather station search
+TOP_N_CLOSEST_EMS = 10  # Candidate stations recorded per train station, inside the radius above
 
 # All instant (non-rolling) FMI weather parameters — used to drive per-feature top-5 fallback
 FMI_INSTANT_PARAMS = [
@@ -140,7 +141,7 @@ CSV_FMI = "fmi_weather_observations.csv"
 CSV_FMI_EMS = "metadata_fmi_ems_stations.csv"
 CSV_FMI_EF_REGISTRY = "metadata_fmi_ef_registry.csv"
 CSV_CLOSEST_EMS_TRAIN = "metadata_closest_ems_to_train_stations.csv"
-CSV_TOP5_CLOSEST_EMS_TRAIN = "metadata_top5_closest_ems.csv"
+CSV_TOPN_CLOSEST_EMS_TRAIN = "metadata_top10_closest_ems.csv"
 CSV_MATCHED_DATA = "matched_data.csv"
 CSV_ALL_TRAINS_FLAT = "all_trains_data_flat.csv"
 CSV_MATCHED_DATA_FLAT = "matched_data_flat.csv"
