@@ -6,9 +6,8 @@ import re
 import numpy as np
 import pandas as pd
 from glob import glob
-from haversine import haversine, Unit
 from collections import Counter
-from config.const import CSV_ALL_TRAINS, CSV_ALL_TRAINS_FLAT, CSV_CLOSEST_EMS_TRAIN, CSV_TOPN_CLOSEST_EMS_TRAIN, CSV_DELAY_TABLE_EACH_STATION, CSV_DELAY_TABLE_OFFSET, CSV_DELAY_TABLE_ORIGINAL, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_MATCHED_DATA_FLAT, CSV_TRAIN_STATIONS, DELAY_LONG_DISTANCE_TRAINS, FILTER_BY_ROUTE, FILTER_BY_TRAIN_CATEGORY, FMI_INSTANT_PARAMS, FMI_ROLLING_WINDOW_HOURS, FMI_ROLLING_WINDOW_PARAMS, FMI_ROLLING_SKIP_MIN_MAX, FMI_ROLLING_INCLUDE_CUMULATIVE, FOLDER_NAME, MANDATORY_STATIONS, PARQUET_ALL_TRAINS_FLAT, PARQUET_FMI, PARQUET_MATCHED_DATA_FLAT, TOP_N_CLOSEST_EMS, TRAIN_CATEGORY_FILTER, get_fmi_rolling_column_names
+from config.const import ALTERNATIVE_WEATHER_RADIUS_KM, CSV_ALL_TRAINS, CSV_ALL_TRAINS_FLAT, CSV_CLOSEST_EMS_TRAIN, CSV_TOPN_CLOSEST_EMS_TRAIN, CSV_DELAY_TABLE_EACH_STATION, CSV_DELAY_TABLE_OFFSET, CSV_DELAY_TABLE_ORIGINAL, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_MATCHED_DATA_FLAT, CSV_TRAIN_STATIONS, DELAY_LONG_DISTANCE_TRAINS, FILTER_BY_ROUTE, FILTER_BY_TRAIN_CATEGORY, FMI_INSTANT_PARAMS, FMI_ROLLING_WINDOW_HOURS, FMI_ROLLING_WINDOW_PARAMS, FMI_ROLLING_SKIP_MIN_MAX, FMI_ROLLING_INCLUDE_CUMULATIVE, FOLDER_NAME, MANDATORY_STATIONS, PARQUET_ALL_TRAINS_FLAT, PARQUET_FMI, PARQUET_MATCHED_DATA_FLAT, TOP_N_CLOSEST_EMS, TRAIN_CATEGORY_FILTER, get_fmi_rolling_column_names
 from config.const import send_email
 
 class DataLoader:
@@ -718,68 +717,104 @@ class DataLoader:
         print(f"\n✅ Parquet conversion complete.")
         print(f"{'='*60}\n")
 
+    @staticmethod
+    def _haversine_km(train_lat, train_long, ems_stations):
+        """
+        Great-circle distance in km from one train station to every EMS station.
+
+        Vectorised over the pool: the previous per-row haversine() call cost
+        563 x 271 Python-level invocations per run.
+
+        Returns:
+            np.ndarray: distances in km, aligned with ems_stations row order.
+        """
+        earth_radius_km = 6371.0
+        lat1 = np.radians(train_lat)
+        lon1 = np.radians(train_long)
+        lat2 = np.radians(ems_stations["latitude"].to_numpy(dtype=float))
+        lon2 = np.radians(ems_stations["longitude"].to_numpy(dtype=float))
+
+        sin_dlat = np.sin((lat2 - lat1) / 2.0) ** 2
+        sin_dlon = np.sin((lon2 - lon1) / 2.0) ** 2
+        a = sin_dlat + np.cos(lat1) * np.cos(lat2) * sin_dlon
+        return 2.0 * earth_radius_km * np.arcsin(np.sqrt(a))
+
     def _find_closest_ems(self, train_lat, train_long, ems_stations):
         """
-        Finds the closest EMS station based on Haversine distance.
+        Finds the closest EMS station within ALTERNATIVE_WEATHER_RADIUS_KM.
+
+        A train station with no EMS inside the radius gets no match at all rather
+        than a distant one. Five Finnish rail termini and every non-FI station are
+        in that position; filling them from hundreds of kilometres away produced
+        readings that looked valid and were not.
 
         Parameters:
             train_lat (float): Latitude of the train station.
             train_long (float): Longitude of the train station.
-            ems_stations (pd.DataFrame): DataFrame containing EMS station data.
+            ems_stations (pd.DataFrame): Pool with station_name, latitude, longitude.
 
         Returns:
-            tuple: (EMS station name, EMS latitude, EMS longitude, distance in km)
+            tuple: (station name, latitude, longitude, distance_km), or
+                   (None, None, None, nan) when nothing is inside the radius.
         """
-        min_distance = float("inf")
-        closest_ems = None
-        closest_lat = None
-        closest_long = None
+        if ems_stations.empty:
+            return None, None, None, float("nan")
 
-        for _, ems in ems_stations.iterrows():
-            ems_coords = (ems["latitude"], ems["longitude"])
-            train_coords = (train_lat, train_long)
+        distances = DataLoader._haversine_km(train_lat, train_long, ems_stations)
+        best = int(np.argmin(distances))
 
-            # Compute Haversine distance
-            distance = haversine(train_coords, ems_coords, unit=Unit.KILOMETERS)
+        if distances[best] > ALTERNATIVE_WEATHER_RADIUS_KM:
+            return None, None, None, float("nan")
 
-            if distance < min_distance:
-                min_distance = distance
-                closest_ems = ems["station_name"]
-                closest_lat = ems["latitude"]
-                closest_long = ems["longitude"]
-
-        return closest_ems, closest_lat, closest_long, min_distance
+        station = ems_stations.iloc[best]
+        return (
+            station["station_name"],
+            float(station["latitude"]),
+            float(station["longitude"]),
+            float(distances[best]),
+        )
 
     def _find_top_n_closest_ems(self, train_lat, train_long, ems_stations, n=TOP_N_CLOSEST_EMS):
         """
-        Finds the top N closest EMS stations based on Haversine distance.
+        Finds the N closest EMS stations within ALTERNATIVE_WEATHER_RADIUS_KM.
+
+        The candidate list is pure geography: it says nothing about whether a
+        station has data in any given month. Liveness is resolved at merge time by
+        walking these ranks, so a candidate that is silent for a month costs
+        nothing here.
+
+        All n * 4 keys are always present; slots past the last in-radius candidate
+        are NaN, which keeps the CSV rectangular.
 
         Parameters:
             train_lat (float): Latitude of the train station.
             train_long (float): Longitude of the train station.
-            ems_stations (pd.DataFrame): DataFrame containing EMS station data.
-            n (int): Number of closest stations to return.
+            ems_stations (pd.DataFrame): Pool with station_name, latitude, longitude.
+            n (int): Number of candidate slots to emit.
 
         Returns:
-            pd.Series: Flat series with columns ems_1_station, ems_1_lat, ems_1_long, ems_1_distance_km, ..., ems_N_*.
+            pd.Series: ems_1_station, ems_1_lat, ems_1_long, ems_1_distance_km, ..., ems_N_*.
         """
-        train_coords = (train_lat, train_long)
-        distances = []
-
-        for _, ems in ems_stations.iterrows():
-            ems_coords = (ems["latitude"], ems["longitude"])
-            distance = haversine(train_coords, ems_coords, unit=Unit.KILOMETERS)
-            distances.append((ems["station_name"], ems["latitude"], ems["longitude"], distance))
-
-        distances.sort(key=lambda x: x[3])
-        top_n = distances[:n]
-
         result = {}
-        for i, (name, lat, lon, dist) in enumerate(top_n, start=1):
-            result[f"ems_{i}_station"] = name
-            result[f"ems_{i}_lat"] = lat
-            result[f"ems_{i}_long"] = lon
-            result[f"ems_{i}_distance_km"] = round(dist, 2)
+        for rank in range(1, n + 1):
+            result[f"ems_{rank}_station"] = np.nan
+            result[f"ems_{rank}_lat"] = np.nan
+            result[f"ems_{rank}_long"] = np.nan
+            result[f"ems_{rank}_distance_km"] = np.nan
+
+        if ems_stations.empty:
+            return pd.Series(result)
+
+        distances = DataLoader._haversine_km(train_lat, train_long, ems_stations)
+        inside = np.flatnonzero(distances <= ALTERNATIVE_WEATHER_RADIUS_KM)
+        order = inside[np.argsort(distances[inside])][:n]
+
+        for rank, position in enumerate(order, start=1):
+            station = ems_stations.iloc[int(position)]
+            result[f"ems_{rank}_station"] = station["station_name"]
+            result[f"ems_{rank}_lat"] = float(station["latitude"])
+            result[f"ems_{rank}_long"] = float(station["longitude"])
+            result[f"ems_{rank}_distance_km"] = round(float(distances[position]), 2)
 
         return pd.Series(result)
 
