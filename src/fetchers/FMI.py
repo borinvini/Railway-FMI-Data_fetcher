@@ -142,12 +142,33 @@ class FMIDataFetcher:
 
     def save_station_metadata(self, df, filename):
         """
-        Saves the station metadata table, refusing to write an empty one.
+        Saves the station metadata table as a union with any existing file at that
+        path, refusing to write an empty one.
 
         save_to_csv treats an empty frame as a no-op and returns, which leaves any
         previous run's file untouched. For station metadata that is a silent
         correctness failure: matching would proceed against a station table built
-        from a different date range or bounding box.
+        from a different date range or bounding box. That empty-table refusal is
+        retained here, and still fires before any file is read.
+
+        When a pool file already exists at filepath, the new rows are unioned into
+        it rather than overwriting it: two runs over disjoint months converge on one
+        pool instead of leaving whichever ran last as the only survivor. This is
+        safe because merge-time liveness resolution walks the candidate pool per
+        month and skips any station silent for that month, so carrying a station
+        that wasn't observed in a given run costs nothing.
+
+        `observed_in_run` is OR-accumulated across the union: a station observed in
+        any earlier run stays observed even if a later run didn't see it, because
+        the column means "has ever produced data", not "produced data this run".
+        Where a station appears with both a registry-sourced and an observation-
+        sourced coordinate, the registry row wins regardless of write order, so a
+        later registry coordinate correction propagates.
+
+        A pool file written before this union existed will not have
+        `observed_in_run`. Such a file was built from the observation feed alone, so
+        every station in it was in fact observed by construction — that column is
+        backfilled as True before the union runs.
 
         Args:
             df (pd.DataFrame): The station table to save.
@@ -164,7 +185,31 @@ class FMIDataFetcher:
             )
 
         filepath = os.path.join(self.output_folder, filename)
-        df.to_csv(filepath, index=False, encoding="utf-8")
+
+        if os.path.exists(filepath):
+            previous = pd.read_csv(filepath)
+            if "observed_in_run" not in previous.columns:
+                # Files written before the pool became a union came from the
+                # observation feed alone, so every station in them was observed
+                # by construction.
+                previous["observed_in_run"] = True
+            combined = pd.concat([previous, df], ignore_index=True)
+
+            # A station observed in any earlier run stays observed; the column means
+            # "has ever produced data in a fetched range", not "produced data this run".
+            observed = combined.groupby("fmisid")["observed_in_run"].any()
+
+            # Registry coordinates are authoritative, so a row sourced from the
+            # registry wins over one sourced from observations regardless of order.
+            combined["_ef_first"] = (combined["coord_source"] != "ef").astype(int)
+            combined = combined.sort_values(["fmisid", "_ef_first"], kind="stable")
+            deduped = combined.drop_duplicates("fmisid", keep="first").drop(columns="_ef_first")
+
+            deduped["observed_in_run"] = deduped["fmisid"].map(observed)
+            df = deduped.sort_values("fmisid").reset_index(drop=True)
+            print(f"ℹ️ Pool union: {len(previous)} existing + this run → {len(df)} stations.")
+
+        df[STATION_COLUMNS].to_csv(filepath, index=False, encoding="utf-8")
         print(f"Station metadata saved to {filepath} ({len(df)} stations)")
 
     def save_monthly_data_to_csv(self, df, base_filename, year, month):
