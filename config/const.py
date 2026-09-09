@@ -13,8 +13,8 @@ except ImportError:
     pass
 
 # PARAMETERS
-START_DATE = "2024-01-01" # YYYY-MM-DD
-END_DATE = "2024-01-01" # YYYY-MM-DD
+START_DATE = "2018-01-01" # YYYY-MM-DD
+END_DATE = "2018-01-31" # YYYY-MM-DD
 
 # Delay threshold (in minutes) for considering a stop as delayed
 DELAY_LONG_DISTANCE_TRAINS = 5
