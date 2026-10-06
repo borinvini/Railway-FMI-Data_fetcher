@@ -53,6 +53,9 @@ FMI_INSTANT_PARAMS = [
     "Present weather (auto)",
 ]
 
+# Columns that identify one FMI observation; used to drop duplicated hour-mark rows
+FMI_OBSERVATION_KEY = ["station_name", "timestamp"]
+
 # FMI Weather preprocessing parameters
 FMI_ROLLING_WINDOW_HOURS = [12, 24, 72]  # Rolling window sizes in hours
 

@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from fmiopendata.wfs import download_stored_query
 
-from config.const import FMI_OBSERVATIONS, FMI_EMS, CSV_FMI, CSV_FMI_EMS, FOLDER_NAME
+from config.const import FMI_OBSERVATIONS, FMI_EMS, CSV_FMI, CSV_FMI_EMS, FOLDER_NAME, FMI_OBSERVATION_KEY
 
 # Pinned schema for metadata_fmi_ems_stations.csv. The first four columns are the
 # file's published shape and must keep this order; the remaining five are additive
@@ -239,6 +239,17 @@ class FMIDataFetcher:
             self.save_to_csv(df, filename)
 
 
+    @staticmethod
+    def _drop_duplicate_observations(df):
+        """Drop repeated (station, timestamp) rows, reporting how many were removed."""
+        if df.empty or not set(FMI_OBSERVATION_KEY).issubset(df.columns):
+            return df
+        deduped = df.drop_duplicates(FMI_OBSERVATION_KEY, keep="first").reset_index(drop=True)
+        removed = len(df) - len(deduped)
+        if removed:
+            print(f"⚠️ Dropped {removed} duplicated (station, timestamp) rows.")
+        return deduped
+
     def fetch_fmi_data(self, location, start_time, end_time, chunk_hours=1, max_retries=3):
         """
         Fetches weather observation data and station metadata from the Finnish Meteorological Institute (FMI)
@@ -261,7 +272,9 @@ class FMIDataFetcher:
         while current_time < end_time:
             chunk_end = min(current_time + timedelta(hours=chunk_hours), end_time)
             start_time_iso = current_time.isoformat() + "Z"
-            end_time_iso = chunk_end.isoformat() + "Z"
+            # FMI treats endtime as inclusive, so stop one second short of the next
+            # chunk's start; otherwise every hour mark is returned by both chunks.
+            end_time_iso = (chunk_end - timedelta(seconds=1)).isoformat() + "Z"
 
             print(f"Fetching FMI data from {start_time_iso} to {end_time_iso}")
             time.sleep(5)  # Delay to prevent rate limits
@@ -310,6 +323,7 @@ class FMIDataFetcher:
             current_time = chunk_end
 
         df_data_combined = pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame()
+        df_data_combined = self._drop_duplicate_observations(df_data_combined)
         df_metadata = pd.DataFrame.from_dict(station_metadata, orient="index").reset_index() if station_metadata else pd.DataFrame()
         if not df_metadata.empty:
             df_metadata.rename(columns={"index": "station_name"}, inplace=True)
@@ -364,7 +378,9 @@ class FMIDataFetcher:
                 all_fmi_data
                 and (current_date.month != (current_date + timedelta(days=1)).month or current_date == end_date)
             ):
-                fmi_data_combined = pd.concat(all_fmi_data, ignore_index=True)
+                fmi_data_combined = self._drop_duplicate_observations(
+                    pd.concat(all_fmi_data, ignore_index=True)
+                )
                 self.save_monthly_data_to_csv(fmi_data_combined, CSV_FMI, current_date.year, current_date.month)
                 all_fmi_data = []  # Reset for the new month
 

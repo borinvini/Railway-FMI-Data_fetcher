@@ -8,6 +8,7 @@ import pandas as pd
 from glob import glob
 from collections import Counter
 from config.const import ALTERNATIVE_WEATHER_RADIUS_KM, CSV_ALL_TRAINS, CSV_ALL_TRAINS_FLAT, CSV_CLOSEST_EMS_TRAIN, CSV_TOPN_CLOSEST_EMS_TRAIN, CSV_DELAY_TABLE_EACH_STATION, CSV_DELAY_TABLE_OFFSET, CSV_DELAY_TABLE_ORIGINAL, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_MATCHED_DATA_FLAT, CSV_TRAIN_STATIONS, DELAY_LONG_DISTANCE_TRAINS, FILTER_BY_ROUTE, FILTER_BY_TRAIN_CATEGORY, FMI_INSTANT_PARAMS, FMI_ROLLING_WINDOW_HOURS, FMI_ROLLING_WINDOW_PARAMS, FMI_ROLLING_SKIP_MIN_MAX, FMI_ROLLING_INCLUDE_CUMULATIVE, FOLDER_NAME, MANDATORY_STATIONS, PARQUET_ALL_TRAINS_FLAT, PARQUET_FMI, PARQUET_MATCHED_DATA_FLAT, TOP_N_CLOSEST_EMS, TRAIN_CATEGORY_FILTER, get_fmi_rolling_column_names
+from config.const import FMI_OBSERVATION_KEY
 from config.const import send_email
 
 class DataLoader:
@@ -200,6 +201,18 @@ class DataLoader:
                     print(f"      → {col_name}")
         print(f"{'='*60}\n")
         
+        def all_rolling_columns():
+            """Every rolling column this step produces, for all parameters and windows."""
+            cols = []
+            for param in FMI_ROLLING_WINDOW_PARAMS:
+                skip = param in FMI_ROLLING_SKIP_MIN_MAX
+                skip_cum = param not in FMI_ROLLING_INCLUDE_CUMULATIVE
+                for wh in FMI_ROLLING_WINDOW_HOURS:
+                    cols.extend(get_fmi_rolling_column_names(param, wh, skip_min_max=skip, skip_cumulative=skip_cum).values())
+            return cols
+
+        rolling_columns = all_rolling_columns()
+
         # Sort weather files chronologically
         sorted_weather_files = sorted(self.weather_files)
         
@@ -223,11 +236,25 @@ class DataLoader:
             
             # Load the weather data
             weather_data = pd.read_csv(weather_file)
-            original_row_count = len(weather_data)
-            
+
             # Ensure timestamp is in datetime format
             weather_data["timestamp"] = pd.to_datetime(weather_data["timestamp"], errors="coerce")
-            
+
+            # Overlapping fetch windows used to store every hour mark twice, which
+            # made rolling sums count each hourly total twice. The twins carry
+            # identical instant values, so keeping the first is lossless.
+            duplicate_mask = weather_data.duplicated(FMI_OBSERVATION_KEY)
+            n_duplicates = int(duplicate_mask.sum())
+            if n_duplicates:
+                print(f"  ⚠️ Dropping {n_duplicates} duplicated (station, timestamp) rows")
+                weather_data = weather_data[~duplicate_mask].reset_index(drop=True)
+                # Rolling columns computed over the duplicates are wrong; recompute them.
+                stale_cols = [c for c in rolling_columns if c in weather_data.columns]
+                if stale_cols:
+                    print(f"  ♻️ Discarding {len(stale_cols)} stale rolling columns for recomputation")
+                    weather_data = weather_data.drop(columns=stale_cols)
+            original_row_count = len(weather_data)
+
             # Check which parameters exist in the data
             available_params = [p for p in FMI_ROLLING_WINDOW_PARAMS if p in weather_data.columns]
             missing_params = [p for p in FMI_ROLLING_WINDOW_PARAMS if p not in weather_data.columns]
@@ -247,7 +274,7 @@ class DataLoader:
             first_skip_cum = first_param not in FMI_ROLLING_INCLUDE_CUMULATIVE
             first_col_names = get_fmi_rolling_column_names(first_param, FMI_ROLLING_WINDOW_HOURS[0], skip_min_max=first_skip, skip_cumulative=first_skip_cum)
             first_check_col = first_col_names['mean']
-            if first_check_col in weather_data.columns:
+            if first_check_col in weather_data.columns and n_duplicates == 0:
                 print(f"  ℹ️ Rolling features already exist. Skipping...")
                 # Keep last max_window hours for the next month's rolling window continuity.
                 # max() and boolean filter don't require a sorted copy — avoid sort_values+reset_index
@@ -277,14 +304,8 @@ class DataLoader:
                 prev_last_hour = previous_month_data[previous_month_data["timestamp"] > cutoff_time].copy()
 
                 # Remove rolling feature columns from previous month if they exist
-                cols_to_remove = ["_is_current_month"]
-                for param in FMI_ROLLING_WINDOW_PARAMS:
-                    skip = param in FMI_ROLLING_SKIP_MIN_MAX
-                    skip_cum = param not in FMI_ROLLING_INCLUDE_CUMULATIVE
-                    for wh in FMI_ROLLING_WINDOW_HOURS:
-                        col_names = get_fmi_rolling_column_names(param, wh, skip_min_max=skip, skip_cumulative=skip_cum)
-                        cols_to_remove.extend(col_names.values())
-                
+                cols_to_remove = ["_is_current_month"] + rolling_columns
+
                 for col in cols_to_remove:
                     if col in prev_last_hour.columns:
                         prev_last_hour = prev_last_hour.drop(columns=[col])
@@ -363,7 +384,10 @@ class DataLoader:
             
             # Restore original column order with new columns at the end
             # First, get the original columns (excluding the new ones)
-            original_cols = [col for col in pd.read_csv(weather_file, nrows=0).columns]
+            # The header may already hold (stale) rolling columns; exclude them so
+            # they are not listed twice once the recomputed ones are appended.
+            rolling_set = set(rolling_columns)
+            original_cols = [col for col in pd.read_csv(weather_file, nrows=0).columns if col not in rolling_set]
             
             # Build list of new columns in order (grouped by param, then by window)
             new_cols = []
@@ -389,6 +413,9 @@ class DataLoader:
             if original_row_count != final_row_count:
                 print(f"  ⚠️ Row count mismatch: {original_row_count} -> {final_row_count}")
             
+            assert not weather_data.duplicated(FMI_OBSERVATION_KEY).any(), \
+                f"Duplicated (station, timestamp) rows remain in {weather_file}"
+
             # Save back to CSV
             weather_data.to_csv(weather_file, index=False)
             
@@ -1333,6 +1360,9 @@ class DataLoader:
         weather_data["timestamp"] = pd.to_datetime(weather_data["timestamp"], errors="coerce")
 
         # Precompute EMS weather data in a dictionary for quick lookups
+        # Defensive de-dup: a duplicated hour mark would make the nearest-timestamp
+        # lookup pick between twins whose rolling values differ.
+        weather_data = weather_data.drop_duplicates(FMI_OBSERVATION_KEY, keep="first")
         self.ems_weather_dict = {
             station: df.sort_values(by="timestamp").reset_index(drop=True)
             for station, df in weather_data.groupby("station_name")
