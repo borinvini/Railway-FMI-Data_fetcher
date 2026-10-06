@@ -1,5 +1,7 @@
 import os
 import time
+import numpy as np
+import pandas as pd
 from src.processors.DataLoader import DataLoader
 from src.fetchers.Railway import RailwayDataFetcher
 from src.fetchers.FMI import FMIDataFetcher, reconcile_station_metadata
@@ -17,6 +19,35 @@ def format_duration(seconds: float) -> str:
     if minutes:
         return f"{int(minutes)}m {secs:.2f}s"
     return f"{secs:.2f}s"
+
+
+def warn_station_drift(old_path: str, new_df: pd.DataFrame, threshold_m: float = 100.0) -> None:
+    """Warn when train stations moved more than threshold_m between two downloads.
+
+    Only warns, never blocks. A shifted station table silently skews every
+    closest_ems_distance_km and some weather-station choices downstream.
+    """
+    if not os.path.exists(old_path) or new_df.empty:
+        return
+    cols = ["stationShortCode", "latitude", "longitude"]
+    old = pd.read_csv(old_path, usecols=cols).dropna().set_index("stationShortCode")
+    new = new_df[cols].dropna().set_index("stationShortCode")
+    both = old.join(new, how="inner", lsuffix="_old", rsuffix="_new")
+    if both.empty:
+        return
+    p = np.pi / 180
+    a = (np.sin((both.latitude_new - both.latitude_old) * p / 2) ** 2
+         + np.cos(both.latitude_old * p) * np.cos(both.latitude_new * p)
+         * np.sin((both.longitude_new - both.longitude_old) * p / 2) ** 2)
+    moved = (12742000 * np.arcsin(np.sqrt(a))).rename("moved_m")
+    moved = moved[moved > threshold_m].sort_values(ascending=False)
+    if moved.empty:
+        print(f"✅ Station drift check: no station moved more than {threshold_m:.0f} m.")
+        return
+    worst = ", ".join(f"{sc} {m / 1000:.1f} km" for sc, m in moved.head(8).items())
+    print(f"⚠️ Station drift: {len(moved)} of {len(both)} stations moved more than "
+          f"{threshold_m:.0f} m since the previous download. Largest: {worst}. "
+          f"Check the new table before rebuilding matched files.")
 
 
 program_start = time.perf_counter()
@@ -38,6 +69,7 @@ if DATA_FETCH:
 
     # Fetch station metadata
     stations_metadata = railway_fetcher.fetch_stations_metadata()
+    warn_station_drift(os.path.join(FOLDER_NAME, CSV_TRAIN_STATIONS), stations_metadata)
     railway_fetcher.save_to_csv(stations_metadata, CSV_TRAIN_STATIONS)
 
     # Fetch train categories metadata
