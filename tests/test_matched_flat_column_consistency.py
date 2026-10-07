@@ -110,3 +110,74 @@ def test_weather_value_not_shifted_for_late_chunk(tmp_path):
     assert len(oulu) == 1, "Expected exactly one Oulu stop"
     assert oulu.iloc[0]["Air temperature"] == -7.7
     assert oulu.iloc[0]["Pressure (msl)"] == 1013.0
+
+
+# ---------------------------------------------------------------------------
+# Fixed schema across months (parquet)
+# ---------------------------------------------------------------------------
+
+import pyarrow.parquet as pq
+
+_TYPED_TRAIN = {
+    "trainNumber": 1, "departureDate": "2024-01-01", "operatorUICCode": 10,
+    "operatorShortCode": "vr", "trainType": "IC", "trainCategory": "Long-distance",
+    "commuterLineID": None, "runningCurrently": False, "cancelled": False,
+    "version": 1, "timetableType": "REGULAR", "timetableAcceptanceDate": "2023-12-01",
+}
+
+
+def _make_typed_matched_csv(tmp_path, year_month, track, extra=None, weather_extra=None):
+    weather = {"Air temperature": -5.0, "Pressure (msl)": 1013.0}
+    weather.update(weather_extra or {})
+    stop = _stop("Helsinki", -5.0, extra={"commercialTrack": track, **(extra or {})})
+    stop["weather_observations"] = weather
+    stop.update({"stationUICCode": 1, "commercialStop": True, "trainStopping": True})
+    row = {**_TYPED_TRAIN, "timeTableRows": str([stop])}
+    pd.DataFrame([row]).to_csv(tmp_path / f"matched_data_{year_month}.csv", index=False)
+
+
+def _build_parquets(tmp_path):
+    loader = _make_dataloader(tmp_path)
+    loader.convert_matched_to_flat()
+    loader.convert_to_parquet()
+    return loader
+
+
+def test_parquet_schema_identical_across_months(tmp_path):
+    from src.processors.DataLoader import DataLoader
+    # Month A: digit-only track, no optional fields. Month B: letter code plus optional fields.
+    _make_typed_matched_csv(tmp_path, "2024_01", "001")
+    _make_typed_matched_csv(tmp_path, "2024_02", "5b",
+                            extra={"unknownTrack": True, "stopSector": "A", "unknownDelay": False})
+    _build_parquets(tmp_path)
+
+    expected = DataLoader._matched_flat_schema()
+    for month in ("2024_01", "2024_02"):
+        got = pq.read_schema(tmp_path / f"matched_data_flat_{month}.parquet")
+        assert got.equals(expected), f"{month} schema differs from the fixed schema"
+
+    a = pd.read_parquet(tmp_path / "matched_data_flat_2024_01.parquet")
+    b = pd.read_parquet(tmp_path / "matched_data_flat_2024_02.parquet")
+    assert a["commercialTrack"].iloc[0] == "1"
+    assert b["commercialTrack"].iloc[0] == "5b"
+    assert a["unknownTrack"].isna().all()
+
+
+def test_unknown_columns_are_dropped(tmp_path):
+    _make_typed_matched_csv(tmp_path, "2024_01", "1",
+                            weather_extra={"Unnamed: 15": 85.0, "newApiField": 1.0})
+    _build_parquets(tmp_path)
+
+    cols = pq.read_schema(tmp_path / "matched_data_flat_2024_01.parquet").names
+    assert "Unnamed: 15" not in cols and "newApiField" not in cols
+    flat = pd.read_csv(tmp_path / "matched_data_flat_2024_01.csv")
+    assert not [c for c in flat.columns if c.startswith("Unnamed")]
+
+
+def test_normalize_commercial_track():
+    from src.processors.DataLoader import DataLoader
+    out = DataLoader._normalize_commercial_track(
+        pd.Series(["001", "1", 1.0, "5b", "IR", " 2 ", None, "000", "019b"], dtype=object))
+    assert out.tolist()[:6] == ["1", "1", "1", "5b", "IR", "2"]
+    assert pd.isna(out.iloc[6])
+    assert out.tolist()[7:] == ["0", "019b"]

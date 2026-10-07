@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from fmiopendata.wfs import download_stored_query
 
-from config.const import FMI_OBSERVATIONS, FMI_EMS, CSV_FMI, CSV_FMI_EMS, FOLDER_NAME, FMI_OBSERVATION_KEY
+from config.const import FMI_OBSERVATIONS, FMI_EMS, CSV_FMI, CSV_FMI_EMS, FOLDER_NAME, FMI_OBSERVATION_KEY, FMI_INSTANT_PARAMS
 
 # Pinned schema for metadata_fmi_ems_stations.csv. The first four columns are the
 # file's published shape and must keep this order; the remaining five are additive
@@ -307,6 +307,18 @@ class FMIDataFetcher:
                             row = {"timestamp": timestamp, "station_name": station_name}
                             row.update({param: values["value"] for param, values in variables.items()})
                             data.append(row)
+
+                    # FMI once served three parameters with an empty name (2025-04-29
+                    # 16:00-19:00). Rows are dicts, so they collapsed into one ''
+                    # key and two parameters were silently lost. Retry the chunk; on
+                    # the last attempt keep what we got and say so loudly.
+                    unexpected = sorted({k for row in data for k in row
+                                         if k not in FMI_OBSERVATION_KEY and k not in FMI_INSTANT_PARAMS})
+                    if unexpected:
+                        if attempt < max_retries:
+                            raise ValueError(f"unexpected parameter names {unexpected!r}")
+                        print(f"⚠️ {start_time_iso}: keeping data with unexpected parameter names "
+                              f"{unexpected!r}; parameters may be missing for this window.")
 
                     df_data = pd.DataFrame(data)
                     df_data["timestamp"] = pd.to_datetime(df_data["timestamp"])

@@ -5,6 +5,8 @@ import os
 import re
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 from glob import glob
 from collections import Counter
 from config.const import ALTERNATIVE_WEATHER_RADIUS_KM, CSV_ALL_TRAINS, CSV_ALL_TRAINS_FLAT, CSV_CLOSEST_EMS_TRAIN, CSV_TOPN_CLOSEST_EMS_TRAIN, CSV_DELAY_TABLE_EACH_STATION, CSV_DELAY_TABLE_OFFSET, CSV_DELAY_TABLE_ORIGINAL, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_MATCHED_DATA_FLAT, CSV_TRAIN_STATIONS, DELAY_LONG_DISTANCE_TRAINS, FILTER_BY_ROUTE, FILTER_BY_TRAIN_CATEGORY, FMI_INSTANT_PARAMS, FMI_ROLLING_WINDOW_HOURS, FMI_ROLLING_WINDOW_PARAMS, FMI_ROLLING_SKIP_MIN_MAX, FMI_ROLLING_INCLUDE_CUMULATIVE, FOLDER_NAME, MANDATORY_STATIONS, PARQUET_ALL_TRAINS_FLAT, PARQUET_FMI, PARQUET_MATCHED_DATA_FLAT, TOP_N_CLOSEST_EMS, TRAIN_CATEGORY_FILTER, get_fmi_rolling_column_names
@@ -17,6 +19,82 @@ class DataLoader:
         'trainType', 'trainCategory', 'commuterLineID', 'runningCurrently',
         'cancelled', 'version', 'timetableType', 'timetableAcceptanceDate',
     ]
+
+    # Fixed schema of matched_data_flat_YYYY_MM.{csv,parquet}. Every month is written
+    # with exactly these columns, in this order, with these types. Without it the
+    # column list depended on which optional API fields a month happened to carry,
+    # and commercialTrack became float whenever a month held only digit codes.
+    # Weather columns are appended from config by _matched_flat_columns().
+    _MATCHED_FLAT_HEAD_COLS = [
+        ('trainNumber', pa.int64()), ('departureDate', pa.string()),
+        ('operatorUICCode', pa.int64()), ('operatorShortCode', pa.string()),
+        ('trainType', pa.string()), ('trainCategory', pa.string()),
+        ('commuterLineID', pa.string()), ('runningCurrently', pa.bool_()),
+        ('cancelled', pa.bool_()), ('version', pa.int64()),
+        ('timetableType', pa.string()), ('timetableAcceptanceDate', pa.string()),
+        ('stationName', pa.string()), ('type', pa.string()),
+        ('commercialTrack', pa.string()), ('stop_cancelled', pa.bool_()),
+        ('scheduledTime', pa.string()), ('actualTime', pa.string()),
+        ('differenceInMinutes', pa.float64()),
+        ('differenceInMinutes_offset', pa.float64()),
+        ('differenceInMinutes_eachStation_offset', pa.float64()),
+        ('commercialStop', pa.bool_()), ('causes', pa.string()),
+        ('stationShortCode', pa.string()), ('stationUICCode', pa.int64()),
+        ('countryCode', pa.string()), ('trainReady', pa.string()),
+        ('trainStopping', pa.bool_()), ('closest_ems', pa.string()),
+        ('closest_ems_distance_km', pa.float64()),
+    ]
+    _MATCHED_FLAT_TAIL_COLS = [
+        ('liveEstimateTime', pa.string()), ('estimateSource', pa.string()),
+        # Optional Digitraffic stop fields: all-null in months where the API omitted them.
+        ('unknownDelay', pa.bool_()), ('stopSector', pa.string()),
+        ('unknownTrack', pa.bool_()),
+    ]
+
+    @classmethod
+    def _matched_flat_columns(cls):
+        """Ordered (name, pyarrow type) list for the matched flat files."""
+        weather = [(p, pa.float64()) for p in FMI_INSTANT_PARAMS]
+        for param in FMI_ROLLING_WINDOW_PARAMS:
+            skip = param in FMI_ROLLING_SKIP_MIN_MAX
+            skip_cum = param not in FMI_ROLLING_INCLUDE_CUMULATIVE
+            for wh in FMI_ROLLING_WINDOW_HOURS:
+                names = get_fmi_rolling_column_names(param, wh, skip_min_max=skip, skip_cumulative=skip_cum)
+                weather.extend((n, pa.float64()) for n in names.values())
+        return cls._MATCHED_FLAT_HEAD_COLS + weather + cls._MATCHED_FLAT_TAIL_COLS
+
+    @classmethod
+    def _matched_flat_schema(cls):
+        return pa.schema(cls._matched_flat_columns())
+
+    @staticmethod
+    def _normalize_commercial_track(series):
+        """Return commercialTrack as nullable text with one spelling per track.
+
+        Pure digit codes lose leading zeros and a float suffix ('001', '1' and
+        1.0 all become '1'). Codes with letters ('5b', 'IR', '019b') are kept.
+        """
+        text = series.astype("string").str.strip()
+        text = text.str.replace(r"^(\d+)\.0+$", r"\1", regex=True)
+        digits = text.str.fullmatch(r"\d+").fillna(False).astype(bool)
+        text[digits] = text[digits].str.lstrip("0").replace("", "0")
+        return text
+
+    def _conform_matched_flat(self, df, label=""):
+        """Return df as a pyarrow Table with exactly the fixed matched-flat schema.
+
+        Columns outside the schema are dropped with a warning, missing ones are
+        added as all-null, and commercialTrack is normalised. A value that does
+        not fit its declared type raises instead of being coerced silently.
+        """
+        schema = self._matched_flat_schema()
+        extra = [c for c in df.columns if c not in schema.names]
+        for col in extra:
+            print(f"  ⚠️ {label}: dropping column '{col}' (not in matched-flat schema, "
+                  f"{int(df[col].notna().sum())} non-null values)")
+        df = df.drop(columns=extra).reindex(columns=schema.names)
+        df["commercialTrack"] = self._normalize_commercial_track(df["commercialTrack"])
+        return pa.Table.from_pandas(df, schema=schema, preserve_index=False)
 
     # Column descriptions written to the companion *_schema.csv for every delay table.
     _DELAY_TABLE_SCHEMA = {
@@ -588,25 +666,27 @@ class DataLoader:
 
             print(f"📊 Converting {os.path.basename(matched_file)}...")
 
-            # Pass 1: discover the full, ordered column union across every chunk.
+            # Pass 1: check the keys present in this month against the fixed schema.
             # The flat rows are written chunk-by-chunk in append mode with the
-            # header taken from the first chunk only. Per-chunk DataFrames infer
-            # their columns from the keys present in that chunk, so an optional
-            # stop-level key absent from the first chunk but present in a later
-            # one (e.g. 'unknownTrack') would add a column the header never had,
-            # silently shifting every subsequent column. Collecting the union up
-            # front lets every chunk be written against one fixed schema.
-            column_order = {}  # dict preserves first-seen insertion order
+            # header taken from the first chunk only, so every chunk must be
+            # reindexed to one column list, or an optional stop-level key that
+            # first appears in a later chunk (e.g. 'unknownTrack') would shift
+            # every subsequent column. That list is the fixed matched-flat schema,
+            # identical for every month; keys outside it are dropped with a warning.
+            master_cols = [name for name, _ in self._matched_flat_columns()]
+            seen_keys = {}  # dict preserves first-seen insertion order
             for chunk in pd.read_csv(matched_file, chunksize=500):
                 for row in self._flatten_matched_chunk(chunk, train_level_cols):
                     for key in row:
-                        column_order.setdefault(key)
+                        seen_keys.setdefault(key)
 
-            if not column_order:
+            if not seen_keys:
                 print(f"  ⚠️ No rows to save for {flat_filename}. Skipping.")
                 continue
 
-            master_cols = list(column_order)
+            for key in seen_keys:
+                if key not in master_cols:
+                    print(f"  ⚠️ {flat_filename}: dropping key '{key}' (not in matched-flat schema)")
 
             # Pass 2: write each chunk reindexed to the fixed schema so every row
             # has identical columns, in identical order, as the header.
@@ -734,8 +814,17 @@ class DataLoader:
 
                 try:
                     print(f"  📊 Converting {os.path.basename(csv_file)}...")
-                    df = pd.read_csv(csv_file, low_memory=False, on_bad_lines='skip')
-                    df.to_parquet(parquet_filepath, engine='pyarrow', index=False)
+                    if parquet_base == PARQUET_MATCHED_DATA_FLAT:
+                        # Text-like columns must not be type-inferred: an all-digit
+                        # month would otherwise turn commercialTrack into float.
+                        df = pd.read_csv(csv_file, low_memory=False, on_bad_lines='skip',
+                                         dtype={'commercialTrack': str, 'stopSector': str,
+                                                'commuterLineID': str})
+                        pq.write_table(self._conform_matched_flat(df, os.path.basename(csv_file)),
+                                       parquet_filepath)
+                    else:
+                        df = pd.read_csv(csv_file, low_memory=False, on_bad_lines='skip')
+                        df.to_parquet(parquet_filepath, engine='pyarrow', index=False)
                     print(f"  ✅ Saved {len(df)} rows × {len(df.columns)} columns → {parquet_filename}")
                 except Exception as e:
                     print(f"  ❌ Failed to convert {os.path.basename(csv_file)}: {e}")
