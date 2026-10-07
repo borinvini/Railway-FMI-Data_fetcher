@@ -57,9 +57,10 @@ os.makedirs(FOLDER_NAME, exist_ok=True)
 print(f"✅ Data folder '{FOLDER_NAME}' is ready.")
 
 # Flag to control data collection
-DATA_FETCH = True
+DATA_FETCH = False
 FLAT_FORMAT = True  # Set True to produce all_trains_data_flat_*.csv (one row per stop)
 PARQUET_FORMAT = True  # Set True to convert monthly CSV files to .parquet
+FETCH_CAUSES_METADATA = True  # Set False to keep the existing cause / detailed cause / third cause CSVs in data/
 
 if DATA_FETCH:
     fetch_start = time.perf_counter()
@@ -76,17 +77,25 @@ if DATA_FETCH:
     train_categories = railway_fetcher.fetch_train_categories_metadata()
     railway_fetcher.save_to_csv(train_categories, CSV_TRAIN_CATEGORIES)
 
-    # Fetch cause category codes metadata
-    cause_codes = railway_fetcher.fetch_cause_category_codes_metadata()
-    railway_fetcher.save_to_csv(cause_codes, CSV_TRAIN_CAUSES)
+    if FETCH_CAUSES_METADATA:
+        # Fetch cause category codes metadata
+        cause_codes = railway_fetcher.fetch_cause_category_codes_metadata()
+        railway_fetcher.save_to_csv(cause_codes, CSV_TRAIN_CAUSES)
 
-    # Fetch detailed cause category codes metadata
-    detailed_cause_codes = railway_fetcher.fetch_detailed_cause_category_codes_metadata()
-    railway_fetcher.save_to_csv(detailed_cause_codes, CSV_TRAIN_CAUSES_DETAILED)
+        # Fetch detailed cause category codes metadata
+        detailed_cause_codes = railway_fetcher.fetch_detailed_cause_category_codes_metadata()
+        railway_fetcher.save_to_csv(detailed_cause_codes, CSV_TRAIN_CAUSES_DETAILED)
 
-    # Fetch third cause category codes metadata
-    third_cause_codes = railway_fetcher.fetch_third_cause_category_codes_metadata()
-    railway_fetcher.save_to_csv(third_cause_codes, CSV_TRAIN_THIRD_CAUSES)
+        # Fetch third cause category codes metadata
+        third_cause_codes = railway_fetcher.fetch_third_cause_category_codes_metadata()
+        railway_fetcher.save_to_csv(third_cause_codes, CSV_TRAIN_THIRD_CAUSES)
+    else:
+        for name in (CSV_TRAIN_CAUSES, CSV_TRAIN_CAUSES_DETAILED, CSV_TRAIN_THIRD_CAUSES):
+            path = os.path.join(FOLDER_NAME, name)
+            if os.path.exists(path):
+                print(f"⏭️ Skipping cause metadata fetch, keeping {path}")
+            else:
+                print(f"⚠️ FETCH_CAUSES_METADATA is False but {path} does not exist")
 
     # Fetch train data for a specific interval
     railway_fetcher.fetch_trains_by_interval(START_DATE, END_DATE, stations_metadata)

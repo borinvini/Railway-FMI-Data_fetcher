@@ -59,8 +59,9 @@ Defined in `config/const.py`; change them there only.
   DATA_FETCH = False
   FLAT_FORMAT = True  # Set True to produce all_trains_data_flat_*.csv (one row per stop)
   PARQUET_FORMAT = True  # Set True to convert monthly CSV files to .parquet
+  FETCH_CAUSES_METADATA = True  # Set False to keep the existing cause / detailed cause / third cause CSVs in data/
   ```
-  `DATA_FETCH = True` downloads from the APIs, `False` processes the local files in `data/`. Check the current values before running, since a wrong `DATA_FETCH` either starts a multi-hour download or skips fetching.
+  `DATA_FETCH = True` downloads from the APIs, `False` processes the local files in `data/`. `FETCH_CAUSES_METADATA` only matters when `DATA_FETCH = True`: `False` skips the three cause-code downloads (and their slow translation step) and keeps the CSVs already in `data/`. Check the current values before running, since a wrong `DATA_FETCH` either starts a multi-hour download or skips fetching.
 - Console output uses emoji status prefixes (✅ ⚠️ ❌ ⏱️), matching the existing code.
 - SMTP credentials come from `.env` (see `.env.example`), never from code.
 - Commit messages are Conventional Commits (`fix:`, `feat:`, `test:`, `chore:`, `build:`), describing the effect in plain words.
