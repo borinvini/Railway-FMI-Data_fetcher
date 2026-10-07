@@ -93,6 +93,10 @@ class DataLoader:
             print(f"  ⚠️ {label}: dropping column '{col}' (not in matched-flat schema, "
                   f"{int(df[col].notna().sum())} non-null values)")
         df = df.drop(columns=extra).reindex(columns=schema.names)
+        track_dtype = df["commercialTrack"].dtype
+        if df["commercialTrack"].notna().any() and not (
+                track_dtype == object or pd.api.types.is_string_dtype(track_dtype)):
+            print(f"  ⚠️ {label}: commercialTrack arrived as {track_dtype}, forcing text")
         df["commercialTrack"] = self._normalize_commercial_track(df["commercialTrack"])
         for rule, count in self._rolling_order_violations(df).items():
             print(f"  ⚠️ {label}: {count} row(s) break rolling order: {rule}")

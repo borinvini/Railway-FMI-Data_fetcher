@@ -56,6 +56,7 @@ Defined in `config/const.py`; change them there only.
 
 ## Invariants (each was a real bug; tests in `tests/` pin them)
 - Matched flat files are written with one fixed pyarrow schema (`DataLoader._MATCHED_FLAT_HEAD_COLS` + weather cols + `_MATCHED_FLAT_TAIL_COLS`, via `_conform_matched_flat`). Add new columns there, never ad hoc, or chunked writes drift columns.
+- `commercialTrack` is text in every matched file: `_conform_matched_flat` forces it (digit-only codes lose leading zeros on purpose, `'001'` becomes `'1'`) and prints a warning if it arrives as a number. The train flat parquet files are left as they are: in months where every code is digits (2024_08, 2025_04, 2025_08, 2025_10, 2025_12) pandas guesses a number type there. They are never read by the match step, which uses the raw train CSVs.
 - FMI requests must not overlap: start/end are inclusive, and overlapping hour marks doubled precipitation sums. Deduplicate on `FMI_OBSERVATION_KEY`.
 - Each parameter's rolling windows come from a single weather station (no mixing stations across a window).
 - The EF registry (441 facilities, about 254 weather) only enriches observed stations: LEFT JOIN, never a replacement. Only `FMI_WEATHER_NETWORKS` count as weather sources.

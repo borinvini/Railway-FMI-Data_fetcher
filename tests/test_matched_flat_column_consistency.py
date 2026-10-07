@@ -176,6 +176,28 @@ def test_unknown_columns_are_dropped(tmp_path):
     assert not [c for c in flat.columns if c.startswith("Unnamed")]
 
 
+def test_numeric_commercial_track_is_forced_to_text(tmp_path, capsys):
+    """A month whose platform codes were read as numbers still comes out as text."""
+    import pyarrow as pa
+    loader = _make_dataloader(tmp_path)
+    df = pd.DataFrame({"commercialTrack": [1.0, 2.0, float("nan")]})
+
+    table = loader._conform_matched_flat(df, "2024_08")
+
+    assert table.schema.field("commercialTrack").type == pa.string()
+    assert table.column("commercialTrack").to_pylist() == ["1", "2", None]
+    assert "commercialTrack arrived as float64, forcing text" in capsys.readouterr().out
+
+
+def test_text_commercial_track_gives_no_warning(tmp_path, capsys):
+    loader = _make_dataloader(tmp_path)
+    df = pd.DataFrame({"commercialTrack": ["001", "5b", None]})
+
+    loader._conform_matched_flat(df, "2024_09")
+
+    assert "forcing text" not in capsys.readouterr().out
+
+
 def test_normalize_commercial_track():
     from src.processors.DataLoader import DataLoader
     out = DataLoader._normalize_commercial_track(
