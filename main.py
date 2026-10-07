@@ -61,6 +61,7 @@ DATA_FETCH = False
 FLAT_FORMAT = True  # Set True to produce all_trains_data_flat_*.csv (one row per stop)
 PARQUET_FORMAT = True  # Set True to convert monthly CSV files to .parquet
 FETCH_CAUSES_METADATA = True  # Set False to keep the existing cause / detailed cause / third cause CSVs in data/
+DELETE_MATCHED_CSV = True  # Set False to keep matched_data*.csv after the month's parquet is written and checked
 
 if DATA_FETCH:
     fetch_start = time.perf_counter()
@@ -166,7 +167,7 @@ else:
         # STEP 4: Convert monthly CSV files to Parquet
         # ============================================================
         if PARQUET_FORMAT:
-            data_loader.convert_to_parquet()
+            data_loader.convert_to_parquet(delete_matched_csv=DELETE_MATCHED_CSV)
 
         print("\n" + "="*60)
         print("✅ ALL PROCESSING COMPLETE!")

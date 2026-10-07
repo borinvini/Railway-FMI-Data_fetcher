@@ -24,6 +24,8 @@ Python pipeline that fetches Finnish railway timetables (Digitraffic) and FMI we
 
 `DataLoader.__init__` raises if train and weather month ranges in `data/` differ. Steps skip outputs that already exist, so delete or move old outputs before rebuilding.
 
+Matched files: `matched_data_YYYY_MM.csv` and `matched_data_flat_YYYY_MM.csv` are only intermediate. With `DELETE_MATCHED_CSV = True` (flag in `main.py`), `convert_to_parquet` deletes both once the month's parquet is written and verified (same row count as the CSV and as the number of CSV data lines; otherwise the CSVs stay and a warning is printed). Only months converted in that run are cleaned up. **A matched month counts as done when its parquet exists**, so re-runs do not merge it again. To rebuild a month, delete its parquet in `data/matched/parquet/` (and any leftover CSVs), not the CSV. The disk peak is still one batch of CSVs, since deletion happens in step 4, so process a few months at a time.
+
 ## APIs
 Defined in `config/const.py`; change them there only.
 - Digitraffic railway, base `https://rata.digitraffic.fi/api/v1`:
@@ -72,6 +74,7 @@ Defined in `config/const.py`; change them there only.
   FLAT_FORMAT = True  # Set True to produce all_trains_data_flat_*.csv (one row per stop)
   PARQUET_FORMAT = True  # Set True to convert monthly CSV files to .parquet
   FETCH_CAUSES_METADATA = True  # Set False to keep the existing cause / detailed cause / third cause CSVs in data/
+  DELETE_MATCHED_CSV = True  # Set False to keep matched_data*.csv after the month's parquet is written and checked
   ```
   `DATA_FETCH = True` downloads from the APIs, `False` processes the local files in `data/`. `FETCH_CAUSES_METADATA` only matters when `DATA_FETCH = True`: `False` skips the three cause-code downloads (and their slow translation step) and keeps the CSVs already in `data/`. Check the current values before running, since a wrong `DATA_FETCH` either starts a multi-hour download or skips fetching.
 - Console output uses emoji status prefixes (✅ ⚠️ ❌ ⏱️), matching the existing code.

@@ -653,6 +653,58 @@ class DataLoader:
         print(f"\n✅ Flat train conversion complete.")
         print(f"{'='*60}\n")
 
+    def _matched_parquet_path(self, year, month):
+        """Path of the matched flat parquet of one month. Its existence marks the month as done."""
+        name = f"{PARQUET_MATCHED_DATA_FLAT.replace('.parquet', '')}_{year}_{month:02d}.parquet"
+        return os.path.join(self.matched_folder, SUBFOLDER_PARQUET, name)
+
+    @staticmethod
+    def _count_csv_data_rows(path):
+        """Number of data lines in a CSV file (all lines minus the header), streamed in 64 MB blocks."""
+        n, last = 0, b"\n"
+        with open(path, "rb") as fh:
+            while True:
+                block = fh.read(1 << 26)
+                if not block:
+                    break
+                n += block.count(b"\n")
+                last = block[-1:]
+        if last != b"\n":
+            n += 1
+        return max(n - 1, 0)
+
+    def _delete_matched_csvs_after_parquet(self, flat_csv, nested_csv, parquet_path, rows_read):
+        """Delete a month's matched CSV files once its parquet is verified.
+
+        The parquet must hold exactly as many rows as pandas read from the flat CSV
+        and as the CSV has data lines. A lower parquet count would mean lines were
+        silently skipped (the read uses on_bad_lines='skip'), and then both CSVs stay.
+        Returns True when the files were removed.
+        """
+        try:
+            parquet_rows = pq.ParquetFile(parquet_path).metadata.num_rows
+            csv_rows = self._count_csv_data_rows(flat_csv)
+        except Exception as e:
+            print(f"  ⚠️ Keeping the CSV files, the parquet could not be checked: {e}")
+            return False
+        if not (parquet_rows == rows_read == csv_rows):
+            print(f"  ⚠️ Keeping the CSV files: parquet has {parquet_rows} rows, "
+                  f"{rows_read} rows were read and the CSV has {csv_rows} data lines.")
+            return False
+        freed = 0
+        for path in (flat_csv, nested_csv):
+            if os.path.exists(path):
+                size = os.path.getsize(path)
+                try:
+                    os.remove(path)
+                except OSError as e:
+                    print(f"  ⚠️ Could not remove {os.path.basename(path)}: {e}")
+                    continue
+                freed += size
+                print(f"  🗑️ Removed {os.path.basename(path)} (parquet is verified)")
+        print(f"  💾 Freed {freed / 1e9:.2f} GB")
+        return True
+
     def convert_matched_to_flat(self):
         """
         Convert matched_data CSV files to flat format (one row per train stop).
@@ -660,7 +712,7 @@ class DataLoader:
         Reads each matched_data_YYYY_MM.csv, explodes timeTableRows into individual
         rows, flattens the weather_observations dict into top-level columns, and
         saves matched_data_flat_YYYY_MM.csv in the matched folder next to the original.
-        Skips months where the flat file already exists.
+        Skips months where the flat file already exists or the month's parquet exists.
         """
         matched_files = glob(os.path.join(self.matched_folder,f"{CSV_MATCHED_DATA.replace('.csv', '')}_[0-9]*.csv"))
 
@@ -684,6 +736,10 @@ class DataLoader:
             base = CSV_MATCHED_DATA_FLAT.replace('.csv', '')
             flat_filename = f"{base}_{month_period.year}_{month_period.month:02d}.csv"
             flat_filepath = os.path.join(self.matched_folder, flat_filename)
+
+            if os.path.exists(self._matched_parquet_path(month_period.year, month_period.month)):
+                print(f"  ℹ️ {month_period} already has its parquet. Skipping.")
+                continue
 
             if os.path.exists(flat_filepath):
                 print(f"  ℹ️ {flat_filename} already exists. Skipping.")
@@ -782,7 +838,7 @@ class DataLoader:
                 rows.append(row)
         return rows
 
-    def convert_to_parquet(self):
+    def convert_to_parquet(self, delete_matched_csv=False):
         """
         Convert monthly flat train, FMI weather, and flat matched CSV files to Parquet.
 
@@ -791,6 +847,11 @@ class DataLoader:
         file using pyarrow into that folder's parquet/ subfolder. Skips months where the
         parquet file already exists. Errors on individual files are caught and reported
         without aborting the remaining conversions.
+
+        With delete_matched_csv=True, a matched month's matched_data_flat and
+        matched_data CSV files are removed once the parquet is written and its row
+        count matches the CSV (see _delete_matched_csvs_after_parquet). Only months
+        converted in this call are cleaned up.
         """
         print(f"\n{'='*60}")
         print("STEP 4: Converting monthly CSV files to Parquet")
@@ -858,6 +919,11 @@ class DataLoader:
                         df = pd.read_csv(csv_file, low_memory=False, on_bad_lines='skip')
                         df.to_parquet(parquet_filepath, engine='pyarrow', index=False)
                     print(f"  ✅ Saved {len(df)} rows × {len(df.columns)} columns → {parquet_filename}")
+                    if delete_matched_csv and parquet_base == PARQUET_MATCHED_DATA_FLAT:
+                        nested_csv = os.path.join(
+                            self.matched_folder,
+                            f"{CSV_MATCHED_DATA.replace('.csv', '')}_{month_period.year}_{month_period.month:02d}.csv")
+                        self._delete_matched_csvs_after_parquet(csv_file, nested_csv, parquet_filepath, len(df))
                 except Exception as e:
                     print(f"  ❌ Failed to convert {os.path.basename(csv_file)}: {e}")
 
@@ -1100,6 +1166,11 @@ class DataLoader:
             base = CSV_MATCHED_DATA.replace('.csv', '')
             matched_filename = f"{base}_{month_period.year}_{month_period.month:02d}.csv"
             matched_filepath = os.path.join(self.matched_folder, matched_filename)
+
+            if os.path.exists(self._matched_parquet_path(month_period.year, month_period.month)):
+                print(f"  ℹ️ {month} already has its matched parquet, so the month is done. "
+                      f"Delete that parquet to regenerate it with the current station mapping.")
+                continue
 
             if os.path.exists(matched_filepath):
                 print(f"  ℹ️ {matched_filename} already exists — keeping it. "
