@@ -155,11 +155,11 @@ def test_parquet_schema_identical_across_months(tmp_path):
 
     expected = DataLoader._matched_flat_schema()
     for month in ("2024_01", "2024_02"):
-        got = pq.read_schema(tmp_path / f"matched_data_flat_{month}.parquet")
+        got = pq.read_schema(tmp_path / "parquet" / f"matched_data_flat_{month}.parquet")
         assert got.equals(expected), f"{month} schema differs from the fixed schema"
 
-    a = pd.read_parquet(tmp_path / "matched_data_flat_2024_01.parquet")
-    b = pd.read_parquet(tmp_path / "matched_data_flat_2024_02.parquet")
+    a = pd.read_parquet(tmp_path / "parquet" / "matched_data_flat_2024_01.parquet")
+    b = pd.read_parquet(tmp_path / "parquet" / "matched_data_flat_2024_02.parquet")
     assert a["commercialTrack"].iloc[0] == "1"
     assert b["commercialTrack"].iloc[0] == "5b"
     assert a["unknownTrack"].isna().all()
@@ -170,7 +170,7 @@ def test_unknown_columns_are_dropped(tmp_path):
                             weather_extra={"Unnamed: 15": 85.0, "newApiField": 1.0})
     _build_parquets(tmp_path)
 
-    cols = pq.read_schema(tmp_path / "matched_data_flat_2024_01.parquet").names
+    cols = pq.read_schema(tmp_path / "parquet" / "matched_data_flat_2024_01.parquet").names
     assert "Unnamed: 15" not in cols and "newApiField" not in cols
     flat = pd.read_csv(tmp_path / "matched_data_flat_2024_01.csv")
     assert not [c for c in flat.columns if c.startswith("Unnamed")]

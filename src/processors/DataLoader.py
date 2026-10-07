@@ -10,7 +10,7 @@ import pyarrow.parquet as pq
 from glob import glob
 from collections import Counter
 from config.const import ALTERNATIVE_WEATHER_RADIUS_KM, CSV_ALL_TRAINS, CSV_ALL_TRAINS_FLAT, CSV_CLOSEST_EMS_TRAIN, CSV_TOPN_CLOSEST_EMS_TRAIN, CSV_DELAY_TABLE_EACH_STATION, CSV_DELAY_TABLE_OFFSET, CSV_DELAY_TABLE_ORIGINAL, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_MATCHED_DATA_FLAT, CSV_TRAIN_STATIONS, DELAY_LONG_DISTANCE_TRAINS, FILTER_BY_ROUTE, FILTER_BY_TRAIN_CATEGORY, FMI_INSTANT_PARAMS, FMI_ROLLING_WINDOW_HOURS, FMI_ROLLING_WINDOW_PARAMS, FMI_ROLLING_SKIP_MIN_MAX, FMI_ROLLING_INCLUDE_CUMULATIVE, FOLDER_NAME, MANDATORY_STATIONS, PARQUET_ALL_TRAINS_FLAT, PARQUET_FMI, PARQUET_MATCHED_DATA_FLAT, TOP_N_CLOSEST_EMS, TRAIN_CATEGORY_FILTER, get_fmi_rolling_column_names
-from config.const import FMI_OBSERVATION_KEY, SUBFOLDER_MATCHED, SUBFOLDER_TRAIN, SUBFOLDER_WEATHER
+from config.const import FMI_OBSERVATION_KEY, SUBFOLDER_MATCHED, SUBFOLDER_PARQUET, SUBFOLDER_TRAIN, SUBFOLDER_WEATHER
 from config.const import send_email
 
 class DataLoader:
@@ -145,7 +145,9 @@ class DataLoader:
 
     def _check_data_folder(self):
         # Create the data folder and its subfolders if they don't exist
-        for folder in (self.data_folder, self.train_folder, self.weather_folder, self.matched_folder):
+        monthly_folders = (self.train_folder, self.weather_folder, self.matched_folder)
+        parquet_folders = tuple(os.path.join(f, SUBFOLDER_PARQUET) for f in monthly_folders)
+        for folder in (self.data_folder, *monthly_folders, *parquet_folders):
             if not os.path.exists(folder):
                 os.makedirs(folder, exist_ok=True)
                 print(f"✅ Created data folder: {folder}")
@@ -782,9 +784,9 @@ class DataLoader:
 
         For each source type, finds all monthly CSVs in that source's folder (train,
         weather or matched), reads each one with pandas, and writes a matching .parquet
-        file next to it using pyarrow. Skips months where the parquet file already
-        exists. Errors on individual files are caught and reported without aborting the
-        remaining conversions.
+        file using pyarrow into that folder's parquet/ subfolder. Skips months where the
+        parquet file already exists. Errors on individual files are caught and reported
+        without aborting the remaining conversions.
         """
         print(f"\n{'='*60}")
         print("STEP 4: Converting monthly CSV files to Parquet")
@@ -820,6 +822,9 @@ class DataLoader:
 
             print(f"\n📦 Converting {label} ({len(csv_files)} file(s))...")
 
+            parquet_folder = os.path.join(source_folder, SUBFOLDER_PARQUET)
+            os.makedirs(parquet_folder, exist_ok=True)
+
             for csv_file in sorted(csv_files):
                 dates = self._extract_dates_from_filenames([csv_file])
                 if not dates:
@@ -829,7 +834,7 @@ class DataLoader:
                 month_period = pd.Period(dates[0], freq='M')
                 base = parquet_base.replace('.parquet', '')
                 parquet_filename = f"{base}_{month_period.year}_{month_period.month:02d}.parquet"
-                parquet_filepath = os.path.join(source_folder, parquet_filename)
+                parquet_filepath = os.path.join(parquet_folder, parquet_filename)
 
                 if os.path.exists(parquet_filepath):
                     print(f"  ℹ️  {parquet_filename} already exists. Skipping.")

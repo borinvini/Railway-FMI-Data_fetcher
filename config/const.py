@@ -137,6 +137,7 @@ FOLDER_NAME = "data"
 SUBFOLDER_TRAIN = "train"
 SUBFOLDER_WEATHER = "weather"
 SUBFOLDER_MATCHED = "matched"
+SUBFOLDER_PARQUET = "parquet"  # inside each of train/, weather/ and matched/
 
 CSV_TRAIN_STATIONS = "metadata_train_stations.csv"
 CSV_TRAIN_CATEGORIES = "metadata_train_categories.csv"

@@ -60,8 +60,11 @@ The project includes a data processing pipeline that:
 │   ├── const.py               # Configuration file for constants and paths
 ├── data                       # Fetched and output data (metadata_*.csv at the top level)
 │   ├── train                  # Monthly train files (raw and flat)
+│   │   ├── parquet            # Parquet copies of the flat train files
 │   ├── weather                # Monthly FMI weather files
+│   │   ├── parquet            # Parquet copies of the weather files
 │   ├── matched                # Matched train+weather files and delay tables
+│   │   ├── parquet            # Parquet copies of the flat matched files
 ├── logs                       # Directory for logs
 ├── src
 │   ├── fetchers               # Fetchers for Railway and FMI data

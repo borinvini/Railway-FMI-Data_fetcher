@@ -7,9 +7,11 @@ to three subfolders, while metadata_*.csv stays at the top level:
     data/weather/  fmi_weather_observations_*
     data/matched/  matched_data_*, matched_data_flat_*, delay tables
 
-These tests pin where the fetchers write, where DataLoader looks, and that an
-old flat layout fails with a message saying to move the files, rather than the
-misleading "run DATA_FETCH first".
+Each of the three also has a parquet/ subfolder that holds the .parquet copies.
+
+These tests pin where the fetchers write, where DataLoader looks, where the
+parquet files land, and that an old flat layout fails with a message saying to
+move the files, rather than the misleading "run DATA_FETCH first".
 """
 
 import pandas as pd
@@ -66,6 +68,22 @@ def test_dataloader_finds_files_in_the_subfolders(tmp_path):
     assert [p.endswith("all_trains_data_2024_03.csv") for p in loader.train_files] == [True]
     assert [p.endswith("fmi_weather_observations_2024_03.csv") for p in loader.weather_files] == [True]
     assert (tmp_path / "matched").is_dir()
+    for folder in ("train", "weather", "matched"):
+        assert (tmp_path / folder / "parquet").is_dir()
+
+
+def test_parquet_files_go_to_the_parquet_subfolder(tmp_path):
+    (tmp_path / "train").mkdir()
+    (tmp_path / "weather").mkdir()
+    _frame().to_csv(tmp_path / "train" / "all_trains_data_2024_03.csv", index=False)
+    pd.DataFrame({"timestamp": ["2024-03-01T00:00:00Z"], "station_name": ["X"]}).to_csv(
+        tmp_path / "weather" / "fmi_weather_observations_2024_03.csv", index=False)
+
+    _loader(tmp_path).convert_to_parquet()
+
+    name = "fmi_weather_observations_2024_03.parquet"
+    assert (tmp_path / "weather" / "parquet" / name).exists()
+    assert not (tmp_path / "weather" / name).exists()
 
 
 def test_old_flat_layout_says_to_move_the_files(tmp_path):
