@@ -94,6 +94,8 @@ class DataLoader:
                   f"{int(df[col].notna().sum())} non-null values)")
         df = df.drop(columns=extra).reindex(columns=schema.names)
         df["commercialTrack"] = self._normalize_commercial_track(df["commercialTrack"])
+        for rule, count in self._rolling_order_violations(df).items():
+            print(f"  ⚠️ {label}: {count} row(s) break rolling order: {rule}")
         return pa.Table.from_pandas(df, schema=schema, preserve_index=False)
 
     # Column descriptions written to the companion *_schema.csv for every delay table.
@@ -1605,7 +1607,7 @@ class DataLoader:
         
         return filtered_train_data
 
-    def _find_alternative_weather_data(self, station_short_code, scheduled_time, target_column, exclude_station=None):
+    def _find_alternative_weather_data(self, station_short_code, scheduled_time, target_column, exclude_station=None, columns=None):
         """
         Finds weather data for a specific column from an alternative EMS station using the precomputed top-5 lookup.
 
@@ -1614,6 +1616,10 @@ class DataLoader:
             scheduled_time (str): The scheduled time in ISO format.
             target_column (str): The weather column name to search for (e.g., "Snow depth", "Air temperature").
             exclude_station (str): Station to exclude from search (the primary station).
+            columns (list[str]): If given, a candidate is accepted only when ALL of these columns
+                are non-null in its nearest row, and exactly these columns are returned. Without it,
+                a candidate needs the target instant value and returns the instant plus every
+                rolling column it has.
 
         Returns:
             dict: Dictionary containing the target feature's instant value and all its rolling window
@@ -1678,6 +1684,13 @@ class DataLoader:
 
             closest_row = station_weather_df.iloc[closest_idx]
 
+            if columns is not None:
+                # Block mode: every requested column must be present, otherwise try the next rank.
+                values = {col: closest_row.get(col) for col in columns}
+                if all(v is not None and pd.notna(v) for v in values.values()):
+                    return {col: float(v) for col, v in values.items()}
+                continue
+
             # Check if this station has the target instant value
             weather_value = closest_row.get(target_column)
             if pd.notna(weather_value) and weather_value is not None:
@@ -1701,9 +1714,10 @@ class DataLoader:
         the first candidate that actually has data, so a station commissioned in a
         later year no longer blocks the stops nearest to it.
 
-        closest_ems names the station that supplied the instant block. Individual
-        columns may still come from other ranks via the per-feature fallbacks below,
-        which is long-standing behaviour.
+        closest_ems names the station that supplied the instant block. A missing
+        instant value may be borrowed from another rank, and the rolling columns of
+        one parameter always come from a single station (the primary, or one donor
+        supplying the whole block).
 
         Parameters:
             scheduled_time (str): Scheduled time in ISO format.
@@ -1763,35 +1777,70 @@ class DataLoader:
         ems_station = primary_name
 
         # For every instant weather feature, fall back to the top-5 alternatives if the value is missing.
-        # _find_alternative_weather_data also fills rolling window columns from the same station as a
-        # side-effect, so many rolling windows get populated here too.
+        # Only the instant value is borrowed here; rolling columns are handled as a block below.
         for feature_name in FMI_INSTANT_PARAMS:
             if pd.isna(weather_dict.get(feature_name)):
                 alternative_weather_data = self._find_alternative_weather_data(
                     station_short_code,
                     scheduled_time,
                     target_column=feature_name,
-                    exclude_station=ems_station
+                    exclude_station=ems_station,
+                    columns=[feature_name],
                 )
                 if alternative_weather_data:
                     weather_dict.update(alternative_weather_data)
 
-        # For every rolling window column still missing, search independently across the top-5.
-        # This handles cases where the station used for the instant value lacked rolling history.
+        # Rolling windows of one parameter are nested in time (12h within 24h within 72h), so they
+        # only make sense when they describe the same station. If the primary station lacks any
+        # column of a parameter's block, the whole block comes from the first candidate that has
+        # all of it. A partial block is never completed column by column from different donors.
         for param in FMI_ROLLING_WINDOW_PARAMS:
-            skip_min_max = param in FMI_ROLLING_SKIP_MIN_MAX
-            skip_cumulative = param not in FMI_ROLLING_INCLUDE_CUMULATIVE
-            for window_hours in FMI_ROLLING_WINDOW_HOURS:
-                for col in get_fmi_rolling_column_names(param, window_hours, skip_min_max, skip_cumulative).values():
-                    if pd.isna(weather_dict.get(col)):
-                        alt = self._find_alternative_weather_data(
-                            station_short_code,
-                            scheduled_time,
-                            target_column=col,
-                            exclude_station=ems_station
-                        )
-                        if alt:
-                            weather_dict.update(alt)
+            block = self._rolling_columns(param)
+            if not any(pd.isna(weather_dict.get(col)) for col in block):
+                continue
+            alt = self._find_alternative_weather_data(
+                station_short_code,
+                scheduled_time,
+                target_column=param,
+                exclude_station=ems_station,
+                columns=block,
+            )
+            if alt:
+                weather_dict.update(alt)
 
         return weather_dict
+
+    @staticmethod
+    def _rolling_columns(param):
+        """All rolling window column names (every window and statistic) for one parameter."""
+        skip_min_max = param in FMI_ROLLING_SKIP_MIN_MAX
+        skip_cumulative = param not in FMI_ROLLING_INCLUDE_CUMULATIVE
+        cols = []
+        for window_hours in FMI_ROLLING_WINDOW_HOURS:
+            cols.extend(get_fmi_rolling_column_names(param, window_hours, skip_min_max, skip_cumulative).values())
+        return cols
+
+    @classmethod
+    def _rolling_order_violations(cls, df, tol=0.011):
+        """Count rows that break the nesting of rolling windows, per rule.
+
+        The 12h window sits inside the 24h window, which sits inside the 72h one, so
+        cumulative sums and maxima can only grow with the window and minima can only
+        shrink. Returns {rule: count} for rules with at least one violation.
+        """
+        hours = sorted(FMI_ROLLING_WINDOW_HOURS)
+        found = {}
+        for param in FMI_ROLLING_WINDOW_PARAMS:
+            names = {wh: get_fmi_rolling_column_names(
+                param, wh, param in FMI_ROLLING_SKIP_MIN_MAX, param not in FMI_ROLLING_INCLUDE_CUMULATIVE)
+                for wh in hours}
+            for stat, sign in (("cumulative", 1), ("max", 1), ("min", -1)):
+                if not all(stat in names[wh] and names[wh][stat] in df.columns for wh in hours):
+                    continue
+                for small, large in zip(hours, hours[1:]):
+                    a, b = df[names[small][stat]], df[names[large][stat]]
+                    count = int(((a - b) * sign > tol).sum())
+                    if count:
+                        found[f"{param} {stat} {small}h vs {large}h"] = count
+        return found
     
