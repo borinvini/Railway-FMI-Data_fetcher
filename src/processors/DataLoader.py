@@ -10,7 +10,7 @@ import pyarrow.parquet as pq
 from glob import glob
 from collections import Counter
 from config.const import ALTERNATIVE_WEATHER_RADIUS_KM, CSV_ALL_TRAINS, CSV_ALL_TRAINS_FLAT, CSV_CLOSEST_EMS_TRAIN, CSV_TOPN_CLOSEST_EMS_TRAIN, CSV_DELAY_TABLE_EACH_STATION, CSV_DELAY_TABLE_OFFSET, CSV_DELAY_TABLE_ORIGINAL, CSV_FMI, CSV_FMI_EMS, CSV_MATCHED_DATA, CSV_MATCHED_DATA_FLAT, CSV_TRAIN_STATIONS, DELAY_LONG_DISTANCE_TRAINS, FILTER_BY_ROUTE, FILTER_BY_TRAIN_CATEGORY, FMI_INSTANT_PARAMS, FMI_ROLLING_WINDOW_HOURS, FMI_ROLLING_WINDOW_PARAMS, FMI_ROLLING_SKIP_MIN_MAX, FMI_ROLLING_INCLUDE_CUMULATIVE, FOLDER_NAME, MANDATORY_STATIONS, PARQUET_ALL_TRAINS_FLAT, PARQUET_FMI, PARQUET_MATCHED_DATA_FLAT, TOP_N_CLOSEST_EMS, TRAIN_CATEGORY_FILTER, get_fmi_rolling_column_names
-from config.const import FMI_OBSERVATION_KEY
+from config.const import FMI_OBSERVATION_KEY, SUBFOLDER_MATCHED, SUBFOLDER_TRAIN, SUBFOLDER_WEATHER
 from config.const import send_email
 
 class DataLoader:
@@ -131,8 +131,10 @@ class DataLoader:
     _DELAY_TABLE_COLUMNS = list(_DELAY_TABLE_SCHEMA.keys())
 
     def __init__(self):
-        self.data_folder = FOLDER_NAME
-        self.output_folder = FOLDER_NAME
+        self.data_folder = FOLDER_NAME  # metadata files
+        self.train_folder = os.path.join(FOLDER_NAME, SUBFOLDER_TRAIN)
+        self.weather_folder = os.path.join(FOLDER_NAME, SUBFOLDER_WEATHER)
+        self.matched_folder = os.path.join(FOLDER_NAME, SUBFOLDER_MATCHED)  # matched files + delay tables
         self.train_files = None
         self.weather_files = None
         self.merged_metadata: pd.DataFrame = pd.DataFrame()  
@@ -142,24 +144,23 @@ class DataLoader:
         self._check_data_folder()
 
     def _check_data_folder(self):
-        # Create data folder if it doesn't exist
-        if not os.path.exists(self.data_folder):
-            os.makedirs(self.data_folder, exist_ok=True)
-            print(f"✅ Created data folder: {self.data_folder}")
-        
+        # Create the data folder and its subfolders if they don't exist
+        for folder in (self.data_folder, self.train_folder, self.weather_folder, self.matched_folder):
+            if not os.path.exists(folder):
+                os.makedirs(folder, exist_ok=True)
+                print(f"✅ Created data folder: {folder}")
+
         # Find files matching the patterns
-        self.train_files = glob(os.path.join(self.data_folder, f"{CSV_ALL_TRAINS[:-4]}_[0-9]*.csv"))
-        self.weather_files = glob(os.path.join(self.data_folder, f"{CSV_FMI[:-4]}*.csv"))
+        train_pattern = f"{CSV_ALL_TRAINS[:-4]}_[0-9]*.csv"
+        weather_pattern = f"{CSV_FMI[:-4]}*.csv"
+        self.train_files = glob(os.path.join(self.train_folder, train_pattern))
+        self.weather_files = glob(os.path.join(self.weather_folder, weather_pattern))
 
         if not self.train_files:
-            print(f"⚠️ No train data files matching '{CSV_ALL_TRAINS}' found in the data folder.")
-            print(f"   Make sure to run the script with DATA_FETCH=True first to download the data.")
-            raise FileNotFoundError(f"No train data files matching '{CSV_ALL_TRAINS}' found in the data folder.")
+            self._raise_missing_files("train", CSV_ALL_TRAINS, train_pattern, self.train_folder)
 
         if not self.weather_files:
-            print(f"⚠️ No weather data files matching '{CSV_FMI}' found in the data folder.")
-            print(f"   Make sure to run the script with DATA_FETCH=True first to download the data.")
-            raise FileNotFoundError(f"No weather data files matching '{CSV_FMI}' found in the data folder.")
+            self._raise_missing_files("weather", CSV_FMI, weather_pattern, self.weather_folder)
 
         print(f"Found {len(self.train_files)} train data files.")
         print(f"Found {len(self.weather_files)} weather data files.")
@@ -188,16 +189,32 @@ class DataLoader:
 
         print("\n✅ Data files detected successfully and date ranges match.")
 
+    def _raise_missing_files(self, label, base_name, pattern, expected_folder):
+        """Raise FileNotFoundError for missing monthly files, pointing out the old flat layout.
+
+        Monthly files used to sit directly in the data folder. If matching files are
+        still there, say so, instead of suggesting a fresh download.
+        """
+        print(f"⚠️ No {label} data files matching '{base_name}' found in {expected_folder}.")
+        old_layout = glob(os.path.join(self.data_folder, pattern))
+        if old_layout:
+            message = (f"Found {len(old_layout)} {label} files directly in {self.data_folder}, "
+                       f"but they now belong in {expected_folder}. Move them there.")
+            print(f"   {message}")
+            raise FileNotFoundError(message)
+        print(f"   Make sure to run the script with DATA_FETCH=True first to download the data.")
+        raise FileNotFoundError(f"No {label} data files matching '{base_name}' found in {expected_folder}.")
+
     def save_to_csv(self, df, filename):
         """
-        Save a DataFrame to a CSV file inside the FOLDER_NAME directory.
+        Save a metadata DataFrame to a CSV file at the top level of the FOLDER_NAME directory.
 
         Args:
             df (pd.DataFrame): The DataFrame to save.
             filename (str): Name of the CSV file.
         """
         if df is not None and not df.empty:
-            filepath = os.path.join(self.output_folder, filename)
+            filepath = os.path.join(self.data_folder, filename)
             df.to_csv(filepath, index=False)
             print(f"Data saved to {filepath}")
         else:
@@ -205,21 +222,21 @@ class DataLoader:
 
     def save_monthly_data_to_csv(self, df, month_str):
         """
-        Save the train data for a specific month to a CSV file.
+        Save the matched train+weather data for a specific month to a CSV file in the matched subfolder.
 
         Args:
-            df (pd.DataFrame): DataFrame containing train data for the month.
+            df (pd.DataFrame): DataFrame containing matched data for the month.
             month_str (str): The month in 'YYYY-MM' format.
         """
         # Convert the string 'YYYY-MM' into a Period object
         month_period = pd.Period(month_str, freq='M')
 
-        # Get base filename from CSV_ALL_TRAINS and remove extension if it exists
+        # Get base filename from CSV_MATCHED_DATA and remove extension if it exists
         base_filename = CSV_MATCHED_DATA.replace('.csv', '')
 
         # Create filename using base name and month
         filename = f"{base_filename}_{month_period.year}_{month_period.month:02d}.csv"
-        filepath = os.path.join(self.output_folder, filename)
+        filepath = os.path.join(self.matched_folder, filename)
 
         # Save to CSV
         df.to_csv(filepath, index=False)
@@ -556,7 +573,7 @@ class DataLoader:
         Convert all_trains_data CSV files to flat format (one row per train stop).
 
         Reads each all_trains_data_YYYY_MM.csv, explodes timeTableRows into individual
-        rows, and saves all_trains_data_flat_YYYY_MM.csv alongside the original.
+        rows, and saves all_trains_data_flat_YYYY_MM.csv in the train folder next to the original.
         Skips months where the flat file already exists.
         """
         if not self.train_files:
@@ -577,7 +594,7 @@ class DataLoader:
             month_period = pd.Period(dates[0], freq='M')
             base = CSV_ALL_TRAINS_FLAT.replace('.csv', '')
             flat_filename = f"{base}_{month_period.year}_{month_period.month:02d}.csv"
-            flat_filepath = os.path.join(self.output_folder, flat_filename)
+            flat_filepath = os.path.join(self.train_folder, flat_filename)
 
             if os.path.exists(flat_filepath):
                 print(f"  ℹ️ {flat_filename} already exists. Skipping.")
@@ -636,10 +653,10 @@ class DataLoader:
 
         Reads each matched_data_YYYY_MM.csv, explodes timeTableRows into individual
         rows, flattens the weather_observations dict into top-level columns, and
-        saves matched_data_flat_YYYY_MM.csv alongside the original.
+        saves matched_data_flat_YYYY_MM.csv in the matched folder next to the original.
         Skips months where the flat file already exists.
         """
-        matched_files = glob(os.path.join(self.output_folder, f"{CSV_MATCHED_DATA.replace('.csv', '')}_[0-9]*.csv"))
+        matched_files = glob(os.path.join(self.matched_folder,f"{CSV_MATCHED_DATA.replace('.csv', '')}_[0-9]*.csv"))
 
         if not matched_files:
             print("⚠️ No matched data files found. Skipping flat conversion.")
@@ -660,7 +677,7 @@ class DataLoader:
             month_period = pd.Period(dates[0], freq='M')
             base = CSV_MATCHED_DATA_FLAT.replace('.csv', '')
             flat_filename = f"{base}_{month_period.year}_{month_period.month:02d}.csv"
-            flat_filepath = os.path.join(self.output_folder, flat_filename)
+            flat_filepath = os.path.join(self.matched_folder, flat_filename)
 
             if os.path.exists(flat_filepath):
                 print(f"  ℹ️ {flat_filename} already exists. Skipping.")
@@ -763,10 +780,11 @@ class DataLoader:
         """
         Convert monthly flat train, FMI weather, and flat matched CSV files to Parquet.
 
-        For each source type, finds all monthly CSVs in the output folder, reads each
-        one with pandas, and writes a matching .parquet file using pyarrow. Skips months
-        where the parquet file already exists. Errors on individual files are caught and
-        reported without aborting the remaining conversions.
+        For each source type, finds all monthly CSVs in that source's folder (train,
+        weather or matched), reads each one with pandas, and writes a matching .parquet
+        file next to it using pyarrow. Skips months where the parquet file already
+        exists. Errors on individual files are caught and reported without aborting the
+        remaining conversions.
         """
         print(f"\n{'='*60}")
         print("STEP 4: Converting monthly CSV files to Parquet")
@@ -777,21 +795,24 @@ class DataLoader:
                 f"{CSV_ALL_TRAINS_FLAT.replace('.csv', '')}_[0-9]*.csv",
                 PARQUET_ALL_TRAINS_FLAT,
                 "Flat train data",
+                self.train_folder,
             ),
             (
                 f"{CSV_FMI.replace('.csv', '')}*.csv",
                 PARQUET_FMI,
                 "FMI weather data",
+                self.weather_folder,
             ),
             (
                 f"{CSV_MATCHED_DATA_FLAT.replace('.csv', '')}_[0-9]*.csv",
                 PARQUET_MATCHED_DATA_FLAT,
                 "Flat matched data",
+                self.matched_folder,
             ),
         ]
 
-        for csv_pattern, parquet_base, label in sources:
-            csv_files = glob(os.path.join(self.output_folder, csv_pattern))
+        for csv_pattern, parquet_base, label, source_folder in sources:
+            csv_files = glob(os.path.join(source_folder, csv_pattern))
 
             if not csv_files:
                 print(f"\n⚠️  No {label} CSV files found. Skipping.")
@@ -808,7 +829,7 @@ class DataLoader:
                 month_period = pd.Period(dates[0], freq='M')
                 base = parquet_base.replace('.parquet', '')
                 parquet_filename = f"{base}_{month_period.year}_{month_period.month:02d}.parquet"
-                parquet_filepath = os.path.join(self.output_folder, parquet_filename)
+                parquet_filepath = os.path.join(source_folder, parquet_filename)
 
                 if os.path.exists(parquet_filepath):
                     print(f"  ℹ️  {parquet_filename} already exists. Skipping.")
@@ -1069,7 +1090,7 @@ class DataLoader:
             month_period = pd.Period(month, freq='M')
             base = CSV_MATCHED_DATA.replace('.csv', '')
             matched_filename = f"{base}_{month_period.year}_{month_period.month:02d}.csv"
-            matched_filepath = os.path.join(self.output_folder, matched_filename)
+            matched_filepath = os.path.join(self.matched_folder, matched_filename)
 
             if os.path.exists(matched_filepath):
                 print(f"  ℹ️ {matched_filename} already exists — keeping it. "
@@ -1098,7 +1119,7 @@ class DataLoader:
     def _save_delay_table_schema(self, csv_filename):
         """Save a companion *_schema.csv describing every column in the delay table."""
         schema_filename = csv_filename.replace('.csv', '_schema.csv')
-        schema_path = os.path.join(self.output_folder, schema_filename)
+        schema_path = os.path.join(self.matched_folder, schema_filename)
         rows = [{'column': col, 'description': desc}
                 for col, desc in self._DELAY_TABLE_SCHEMA.items()]
         pd.DataFrame(rows).to_csv(schema_path, index=False)
@@ -1118,7 +1139,7 @@ class DataLoader:
             csv_filename (str): Output CSV filename (basename only).
             month_str (str): Month being processed in 'YYYY-MM' format.
         """
-        delay_file_path = os.path.join(self.output_folder, csv_filename)
+        delay_file_path = os.path.join(self.matched_folder, csv_filename)
 
         if os.path.exists(delay_file_path):
             delay_summary_df = pd.read_csv(delay_file_path)

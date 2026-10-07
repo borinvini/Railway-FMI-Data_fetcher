@@ -133,6 +133,11 @@ FIN_RAILWAY_TRAIN_TRACKING = "/train-tracking"
 # CSVs
 FOLDER_NAME = "data"
 
+# Subfolders of FOLDER_NAME for monthly files; metadata_*.csv stays at the top level
+SUBFOLDER_TRAIN = "train"
+SUBFOLDER_WEATHER = "weather"
+SUBFOLDER_MATCHED = "matched"
+
 CSV_TRAIN_STATIONS = "metadata_train_stations.csv"
 CSV_TRAIN_CATEGORIES = "metadata_train_categories.csv"
 CSV_TRAIN_CAUSES = "metadata_train_causes.csv"  

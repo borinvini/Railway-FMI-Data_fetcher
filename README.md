@@ -58,7 +58,10 @@ The project includes a data processing pipeline that:
 ```sh
 ├── config
 │   ├── const.py               # Configuration file for constants and paths
-├── data                       # Directory to store CSV files (fetched data and output data)
+├── data                       # Fetched and output data (metadata_*.csv at the top level)
+│   ├── train                  # Monthly train files (raw and flat)
+│   ├── weather                # Monthly FMI weather files
+│   ├── matched                # Matched train+weather files and delay tables
 ├── logs                       # Directory for logs
 ├── src
 │   ├── fetchers               # Fetchers for Railway and FMI data

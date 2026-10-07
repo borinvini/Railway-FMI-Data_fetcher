@@ -39,8 +39,16 @@ Defined in `config/const.py`; change them there only.
   - `fmi::ef::stations` (EF station registry)
 
 ## Data
-- Everything is read from and written to `data/` (git-ignored, as are `*.parquet`, `*.json` and `docs/`).
-- The full archive lives outside the repo in `../Railway-FMI-Data-CSV-Files-v2`. Rebuilds are done in batches: copy a period's inputs into `data/`, run, check, copy outputs back.
+- Everything is read from and written to `data/` (git-ignored, as are `*.parquet`, `*.json` and `docs/`). Metadata files stay at its top level, monthly files go to three subfolders (names are `SUBFOLDER_*` in `config/const.py`):
+  ```
+  data/
+  ├── metadata_*.csv    stations, categories, causes, EMS pool, EF registry, closest/top10 EMS
+  ├── train/            all_trains_data_YYYY_MM.csv, all_trains_data_flat_YYYY_MM.{csv,parquet}
+  ├── weather/          fmi_weather_observations_YYYY_MM.{csv,parquet}
+  └── matched/          matched_data_YYYY_MM.csv, matched_data_flat_YYYY_MM.{csv,parquet}, delay_table_*.csv (+ *_schema.csv)
+  ```
+  `DataLoader` keeps one attribute per folder (`data_folder` for metadata, `train_folder`, `weather_folder`, `matched_folder`). Old flat-layout files directly in `data/` are not picked up, and `DataLoader` fails with a message saying to move them.
+- The full archive lives outside the repo in `../Railway-FMI-Data-CSV-Files-v2`. Rebuilds are done in batches: copy a period's train and weather CSVs into `data/train/` and `data/weather/`, run, check, copy outputs back from `data/matched/` (plus the flat and parquet files in `train/` and `weather/`). The v2 archive may still use the old flat layout, so check its structure before copying.
 - Step 4 of processing (monthly merge) uses about 7 GB RAM and takes about 1h20m per 3 months.
 
 ## Invariants (each was a real bug; tests in `tests/` pin them)

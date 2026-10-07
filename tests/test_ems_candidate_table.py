@@ -101,11 +101,14 @@ def test_non_finnish_train_stations_are_excluded(tmp_path):
 
     # DataLoader.__init__ calls _check_data_folder, which raises FileNotFoundError
     # unless the folder holds train AND weather files whose date ranges match.
-    # These two stubs exist only to get past that gate.
+    # These two stubs exist only to get past that gate. Monthly files live in the
+    # train/ and weather/ subfolders; metadata stays at the top level.
+    (tmp_path / "train").mkdir()
+    (tmp_path / "weather").mkdir()
     pd.DataFrame({"trainNumber": [1]}).to_csv(
-        tmp_path / "all_trains_data_2018_01.csv", index=False)
+        tmp_path / "train" / "all_trains_data_2018_01.csv", index=False)
     pd.DataFrame({"timestamp": ["2018-01-01T00:00:00Z"], "station_name": ["X"]}).to_csv(
-        tmp_path / "fmi_weather_observations_2018_01.csv", index=False)
+        tmp_path / "weather" / "fmi_weather_observations_2018_01.csv", index=False)
 
     pd.DataFrame({
         "stationName": ["Helsinki asema", "Tver"],

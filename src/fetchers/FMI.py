@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from fmiopendata.wfs import download_stored_query
 
-from config.const import FMI_OBSERVATIONS, FMI_EMS, CSV_FMI, CSV_FMI_EMS, FOLDER_NAME, FMI_OBSERVATION_KEY, FMI_INSTANT_PARAMS
+from config.const import FMI_OBSERVATIONS, FMI_EMS, CSV_FMI, CSV_FMI_EMS, FOLDER_NAME, SUBFOLDER_WEATHER, FMI_OBSERVATION_KEY, FMI_INSTANT_PARAMS
 
 # Pinned schema for metadata_fmi_ems_stations.csv. The first four columns are the
 # file's published shape and must keep this order; the remaining five are additive
@@ -120,14 +120,16 @@ class FMIDataFetcher:
         """
         self.base_url = FMI_OBSERVATIONS
         self.ems_url = FMI_EMS
-        self.output_folder = FOLDER_NAME
+        self.output_folder = FOLDER_NAME  # metadata files
+        self.weather_folder = os.path.join(FOLDER_NAME, SUBFOLDER_WEATHER)  # monthly weather files
 
-        # Ensure the output folder exists
+        # Ensure the output folders exist
         os.makedirs(self.output_folder, exist_ok=True)
+        os.makedirs(self.weather_folder, exist_ok=True)
 
     def save_to_csv(self, df, filename):
         """
-        Save a DataFrame to a CSV file inside the FOLDER_NAME directory.
+        Save a metadata DataFrame to a CSV file at the top level of the FOLDER_NAME directory.
 
         Args:
             df (pd.DataFrame): The DataFrame to save.
@@ -222,7 +224,7 @@ class FMIDataFetcher:
 
     def save_monthly_data_to_csv(self, df, base_filename, year, month):
         """
-        Saves the DataFrame in a monthly format: `filename_YYYY_MM.csv`.
+        Saves the DataFrame in a monthly format `filename_YYYY_MM.csv` in the weather subfolder.
 
         Args:
             df (pd.DataFrame): The DataFrame to save.
@@ -236,7 +238,9 @@ class FMIDataFetcher:
                 base_filename = base_filename[:-4]  # Remove last 4 characters (".csv")
 
             filename = f"{base_filename}_{year}_{str(month).zfill(2)}.csv"
-            self.save_to_csv(df, filename)
+            filepath = os.path.join(self.weather_folder, filename)
+            df.to_csv(filepath, index=False)
+            print(f"Data saved to {filepath}")
 
 
     @staticmethod

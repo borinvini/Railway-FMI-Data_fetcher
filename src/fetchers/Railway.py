@@ -5,21 +5,23 @@ import pandas as pd
 import os
 from deep_translator import GoogleTranslator
 
-from config.const import CSV_ALL_TRAINS, FIN_RAILWAY_ALL_TRAINS, FIN_RAILWAY_BASE_URL, FIN_RAILWAY_STATIONS, FIN_RAILWAY_TRAIN_CAT, FIN_RAILWAY_TRAIN_CAUSES, FIN_RAILWAY_TRAIN_CAUSES_DETAILED, FIN_RAILWAY_TRAIN_THIRD_CAUSES, FOLDER_NAME
+from config.const import CSV_ALL_TRAINS, FIN_RAILWAY_ALL_TRAINS, FIN_RAILWAY_BASE_URL, FIN_RAILWAY_STATIONS, FIN_RAILWAY_TRAIN_CAT, FIN_RAILWAY_TRAIN_CAUSES, FIN_RAILWAY_TRAIN_CAUSES_DETAILED, FIN_RAILWAY_TRAIN_THIRD_CAUSES, FOLDER_NAME, SUBFOLDER_TRAIN
 
 class RailwayDataFetcher:
     """Class to fetch and process railway data from Digitraffic API."""
 
     def __init__(self):
         self.base_url = FIN_RAILWAY_BASE_URL
-        self.output_folder = FOLDER_NAME
+        self.output_folder = FOLDER_NAME  # metadata files
+        self.train_folder = os.path.join(FOLDER_NAME, SUBFOLDER_TRAIN)  # monthly train files
 
-        # Ensure the output folder exists
+        # Ensure the output folders exist
         os.makedirs(self.output_folder, exist_ok=True)
+        os.makedirs(self.train_folder, exist_ok=True)
 
     def save_to_csv(self, df, filename):
         """
-        Save a DataFrame to a CSV file inside the FOLDER_NAME directory.
+        Save a metadata DataFrame to a CSV file at the top level of the FOLDER_NAME directory.
 
         Args:
             df (pd.DataFrame): The DataFrame to save.
@@ -35,7 +37,7 @@ class RailwayDataFetcher:
 
     def save_monthly_data_to_csv(self, df, month_str):
         """
-        Save the train data for a specific month to a CSV file.
+        Save the train data for a specific month to a CSV file in the train subfolder.
 
         Args:
             df (pd.DataFrame): DataFrame containing train data for the month.
@@ -49,7 +51,7 @@ class RailwayDataFetcher:
 
         # Create filename using base name and month
         filename = f"{base_filename}_{month_period.year}_{month_period.month:02d}.csv"
-        filepath = os.path.join(self.output_folder, filename)
+        filepath = os.path.join(self.train_folder, filename)
 
         # Save to CSV
         df.to_csv(filepath, index=False)

@@ -30,7 +30,9 @@ def _make_dataloader(tmp_path):
     from src.processors.DataLoader import DataLoader
     with patch.object(DataLoader, "_check_data_folder"):
         loader = DataLoader.__new__(DataLoader)
-        loader.output_folder = str(tmp_path)
+        # The tests only write matched files; the train and weather folders are
+        # searched by convert_to_parquet and simply hold nothing here.
+        loader.matched_folder = loader.train_folder = loader.weather_folder = str(tmp_path)
     return loader
 
 

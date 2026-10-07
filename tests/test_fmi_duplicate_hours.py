@@ -40,7 +40,7 @@ def _make_dataloader(tmp_path, weather_file):
     with patch.object(DataLoader, "_check_data_folder"):
         loader = DataLoader.__new__(DataLoader)
         loader.data_folder = str(tmp_path)
-        loader.output_folder = str(tmp_path)
+        loader.weather_folder = str(tmp_path)
         loader.weather_files = [str(weather_file)]
     return loader
 
